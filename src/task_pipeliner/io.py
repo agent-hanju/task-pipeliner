@@ -1,14 +1,16 @@
-"""JSONL reader and writer for task-pipeliner."""
+"""JSONL reader, writer, and SOURCE step for task-pipeliner."""
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from pathlib import Path
 from types import TracebackType
-from typing import BinaryIO
+from typing import Any, BinaryIO, Self
 
 import orjson
+
+from task_pipeliner.base import BaseResult, BaseStep, StepType
 
 logger = logging.getLogger(__name__)
 
@@ -44,43 +46,32 @@ class JsonlReader:
 
 
 class JsonlWriter:
-    """Writes kept / removed items to JSONL files in an output directory."""
+    """Writes items to a single JSONL file."""
 
-    def __init__(self, output_dir: Path) -> None:
-        logger.debug("output_dir=%s", output_dir)
-        self._output_dir = output_dir
-        self._kept_fh: BinaryIO | None = None
-        self._removed_fh: BinaryIO | None = None
+    def __init__(self, path: Path) -> None:
+        logger.debug("path=%s", path)
+        self._path = path
+        self._fh: BinaryIO | None = None
 
     def open(self) -> None:
-        """Create output directory and open kept.jsonl / removed.jsonl for writing."""
-        logger.debug("opening writer at %s", self._output_dir)
-        self._output_dir.mkdir(parents=True, exist_ok=True)
-        self._kept_fh = open(self._output_dir / "kept.jsonl", "wb")  # noqa: SIM115
-        self._removed_fh = open(self._output_dir / "removed.jsonl", "wb")  # noqa: SIM115
-        logger.info("Writer opened (output=%s)", self._output_dir)
+        """Create parent directory and open the file for writing."""
+        logger.debug("opening writer at %s", self._path)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._fh = open(self._path, "wb")  # noqa: SIM115
+        logger.info("Writer opened (output=%s)", self._path)
 
-    def write_kept(self, item: dict) -> None:  # type: ignore[type-arg]
-        """Write a kept item as a JSONL line."""
-        assert self._kept_fh is not None
-        self._kept_fh.write(orjson.dumps(item, option=orjson.OPT_APPEND_NEWLINE))
-
-    def write_removed(self, item: dict, reason: str) -> None:  # type: ignore[type-arg]
-        """Write a removed item with reason as a JSONL line."""
-        assert self._removed_fh is not None
-        record = {"item": item, "reason": reason}
-        self._removed_fh.write(orjson.dumps(record, option=orjson.OPT_APPEND_NEWLINE))
+    def write(self, item: dict) -> None:  # type: ignore[type-arg]
+        """Write a single item as a JSONL line."""
+        assert self._fh is not None
+        self._fh.write(orjson.dumps(item, option=orjson.OPT_APPEND_NEWLINE))
 
     def close(self) -> None:
-        """Close open file handles."""
-        logger.debug("closing writer at %s", self._output_dir)
-        if self._kept_fh is not None:
-            self._kept_fh.close()
-            self._kept_fh = None
-        if self._removed_fh is not None:
-            self._removed_fh.close()
-            self._removed_fh = None
-        logger.info("Writer closed (output=%s)", self._output_dir)
+        """Close the file handle."""
+        logger.debug("closing writer at %s", self._path)
+        if self._fh is not None:
+            self._fh.close()
+            self._fh = None
+        logger.info("Writer closed (output=%s)", self._path)
 
     def __enter__(self) -> JsonlWriter:
         self.open()
@@ -93,3 +84,40 @@ class JsonlWriter:
         exc_tb: TracebackType | None,
     ) -> None:
         self.close()
+
+
+# ---------------------------------------------------------------------------
+# JSONL SOURCE step
+# ---------------------------------------------------------------------------
+
+
+class _NullResult(BaseResult):
+    """Minimal no-op result for JsonlSourceStep."""
+
+    def merge(self, other: Self) -> Self:
+        return self
+
+    def write(self, output_dir: Path) -> None:
+        pass
+
+
+class JsonlSourceStep(BaseStep[_NullResult]):
+    """SOURCE step that reads JSONL files via JsonlReader."""
+
+    def __init__(self, paths: list[str] | None = None) -> None:
+        self._paths = [Path(p) for p in paths] if paths else []
+
+    @property
+    def step_type(self) -> StepType:
+        return StepType.SOURCE
+
+    def items(self) -> Generator[Any, None, None]:
+        reader = JsonlReader(self._paths)
+        yield from reader.read()
+
+    def process(self, item: Any, state: Any, emit: Callable[[Any], None]) -> _NullResult:
+        raise NotImplementedError("SOURCE step does not process items")
+
+    @property
+    def name(self) -> str:
+        return "JsonlSourceStep"

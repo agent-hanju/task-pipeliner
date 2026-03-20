@@ -6,7 +6,7 @@ from pathlib import Path
 
 import orjson
 import pytest
-from dummy_steps import FilterEvenStep, PassthroughStep
+from dummy_steps import DummySourceStep, FilterEvenStep, PassthroughStep
 
 from task_pipeliner.config import ExecutionConfig, PipelineConfig, StepConfig
 from task_pipeliner.engine import PipelineEngine, StepRegistry
@@ -88,33 +88,42 @@ class TestPipelineEngine:
     def test_single_passthrough(self, tmp_path: Path) -> None:
         """Single PassthroughStep — all items flow through."""
         engine, stats = self._make_engine(
-            [StepConfig(type="passthrough")],
-            {"passthrough": PassthroughStep},
+            [
+                StepConfig(type="source", items=list(range(10))),
+                StepConfig(type="passthrough"),
+            ],
+            {"source": DummySourceStep, "passthrough": PassthroughStep},
         )
         output_dir = tmp_path / "out"
-        engine.run(input_items=iter(range(10)), output_dir=output_dir)
+        engine.run(output_dir=output_dir)
         assert stats._stats["PassthroughStep"].passed == 10
 
     @pytest.mark.timeout(30)
     def test_filter_even_stats(self, tmp_path: Path) -> None:
         """FilterEvenStep — 5 even pass, 5 odd filtered."""
         engine, stats = self._make_engine(
-            [StepConfig(type="filter_even")],
-            {"filter_even": FilterEvenStep},
+            [
+                StepConfig(type="source", items=list(range(10))),
+                StepConfig(type="filter_even"),
+            ],
+            {"source": DummySourceStep, "filter_even": FilterEvenStep},
         )
         output_dir = tmp_path / "out"
-        engine.run(input_items=iter(range(10)), output_dir=output_dir)
+        engine.run(output_dir=output_dir)
         assert stats._stats["FilterEvenStep"].passed == 5
 
     @pytest.mark.timeout(30)
     def test_filter_even_result_file(self, tmp_path: Path) -> None:
         """FilterEvenStep — count_result.json written by result.write()."""
         engine, stats = self._make_engine(
-            [StepConfig(type="filter_even")],
-            {"filter_even": FilterEvenStep},
+            [
+                StepConfig(type="source", items=list(range(10))),
+                StepConfig(type="filter_even"),
+            ],
+            {"source": DummySourceStep, "filter_even": FilterEvenStep},
         )
         output_dir = tmp_path / "out"
-        engine.run(input_items=iter(range(10)), output_dir=output_dir)
+        engine.run(output_dir=output_dir)
         result_file = output_dir / "count_result.json"
         assert result_file.exists()
         data = orjson.loads(result_file.read_bytes())
@@ -123,13 +132,21 @@ class TestPipelineEngine:
 
     @pytest.mark.timeout(30)
     def test_multi_step_chain(self, tmp_path: Path) -> None:
-        """passthrough → filter_even: items flow through both steps."""
+        """source → passthrough → filter_even: items flow through all steps."""
         engine, stats = self._make_engine(
-            [StepConfig(type="passthrough"), StepConfig(type="filter_even")],
-            {"passthrough": PassthroughStep, "filter_even": FilterEvenStep},
+            [
+                StepConfig(type="source", items=list(range(10))),
+                StepConfig(type="passthrough"),
+                StepConfig(type="filter_even"),
+            ],
+            {
+                "source": DummySourceStep,
+                "passthrough": PassthroughStep,
+                "filter_even": FilterEvenStep,
+            },
         )
         output_dir = tmp_path / "out"
-        engine.run(input_items=iter(range(10)), output_dir=output_dir)
+        engine.run(output_dir=output_dir)
         assert stats._stats["PassthroughStep"].passed == 10
         assert stats._stats["FilterEvenStep"].passed == 5
 
@@ -138,13 +155,18 @@ class TestPipelineEngine:
         """enabled=False step is not registered in stats."""
         engine, stats = self._make_engine(
             [
+                StepConfig(type="source", items=list(range(10))),
                 StepConfig(type="passthrough", enabled=False),
                 StepConfig(type="filter_even"),
             ],
-            {"passthrough": PassthroughStep, "filter_even": FilterEvenStep},
+            {
+                "source": DummySourceStep,
+                "passthrough": PassthroughStep,
+                "filter_even": FilterEvenStep,
+            },
         )
         output_dir = tmp_path / "out"
-        engine.run(input_items=iter(range(10)), output_dir=output_dir)
+        engine.run(output_dir=output_dir)
         assert "PassthroughStep" not in stats._stats
         assert stats._stats["FilterEvenStep"].passed == 5
 
@@ -152,35 +174,79 @@ class TestPipelineEngine:
     def test_stats_json_written(self, tmp_path: Path) -> None:
         """stats.json created with correct content after run."""
         engine, stats = self._make_engine(
-            [StepConfig(type="passthrough")],
-            {"passthrough": PassthroughStep},
+            [
+                StepConfig(type="source", items=list(range(5))),
+                StepConfig(type="passthrough"),
+            ],
+            {"source": DummySourceStep, "passthrough": PassthroughStep},
         )
         output_dir = tmp_path / "out"
-        engine.run(input_items=iter(range(5)), output_dir=output_dir)
+        engine.run(output_dir=output_dir)
         stats_file = output_dir / "stats.json"
         assert stats_file.exists()
         data = orjson.loads(stats_file.read_bytes())
-        assert len(data) == 1
-        assert data[0]["step_name"] == "PassthroughStep"
-        assert data[0]["passed"] == 5
+        # SOURCE step + PassthroughStep
+        step_names = [d["step_name"] for d in data]
+        assert "DummySourceStep" in step_names
+        assert "PassthroughStep" in step_names
+        pt = next(d for d in data if d["step_name"] == "PassthroughStep")
+        assert pt["passed"] == 5
 
     @pytest.mark.timeout(30)
     def test_empty_input(self, tmp_path: Path) -> None:
         """Empty input — 0 passed, no errors."""
         engine, stats = self._make_engine(
-            [StepConfig(type="passthrough")],
-            {"passthrough": PassthroughStep},
+            [
+                StepConfig(type="source", items=[]),
+                StepConfig(type="passthrough"),
+            ],
+            {"source": DummySourceStep, "passthrough": PassthroughStep},
         )
         output_dir = tmp_path / "out"
-        engine.run(input_items=iter([]), output_dir=output_dir)
+        engine.run(output_dir=output_dir)
         assert stats._stats["PassthroughStep"].passed == 0
 
     def test_unregistered_step_in_config(self, tmp_path: Path) -> None:
         """Config references unregistered step → StepRegistrationError."""
-        config = PipelineConfig(pipeline=[StepConfig(type="unknown")])
+        config = PipelineConfig(
+            pipeline=[StepConfig(type="source", items=[1]), StepConfig(type="unknown")]
+        )
         registry = StepRegistry()
+        registry.register("source", DummySourceStep)
         stats = StatsCollector()
         engine = PipelineEngine(config=config, registry=registry, stats=stats)
         output_dir = tmp_path / "out"
         with pytest.raises(StepRegistrationError):
-            engine.run(input_items=iter([1]), output_dir=output_dir)
+            engine.run(output_dir=output_dir)
+
+    def test_source_not_first_raises(self, tmp_path: Path) -> None:
+        """SOURCE step not at position 0 → ConfigValidationError."""
+        from task_pipeliner.exceptions import ConfigValidationError
+
+        config = PipelineConfig(
+            pipeline=[
+                StepConfig(type="passthrough"),
+                StepConfig(type="source", items=[1]),
+            ]
+        )
+        registry = StepRegistry()
+        registry.register("passthrough", PassthroughStep)
+        registry.register("source", DummySourceStep)
+        stats = StatsCollector()
+        engine = PipelineEngine(config=config, registry=registry, stats=stats)
+        output_dir = tmp_path / "out"
+        with pytest.raises(ConfigValidationError):
+            engine.run(output_dir=output_dir)
+
+    def test_no_source_step_raises(self, tmp_path: Path) -> None:
+        """No SOURCE step in pipeline → ConfigValidationError."""
+        from task_pipeliner.exceptions import ConfigValidationError
+
+        config = PipelineConfig(pipeline=[StepConfig(type="passthrough")])
+        registry = StepRegistry()
+        registry.register("passthrough", PassthroughStep)
+        stats = StatsCollector()
+        engine = PipelineEngine(config=config, registry=registry, stats=stats)
+        output_dir = tmp_path / "out"
+        with pytest.raises(ConfigValidationError):
+            engine.run(output_dir=output_dir)

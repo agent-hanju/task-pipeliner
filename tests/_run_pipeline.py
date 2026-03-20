@@ -6,7 +6,7 @@ import logging
 import sys
 from pathlib import Path
 
-from dummy_steps import FilterEvenStep, PassthroughStep, SlowStep
+from dummy_steps import DummySourceStep, FilterEvenStep, PassthroughStep, SlowStep
 
 from task_pipeliner.config import ExecutionConfig, PipelineConfig, StepConfig
 from task_pipeliner.engine import PipelineEngine, StepRegistry
@@ -31,33 +31,40 @@ def main() -> None:
     root.setLevel(logging.DEBUG)
 
     registry = StepRegistry()
+    registry.register("source", DummySourceStep)
     registry.register("slow", SlowStep)
     registry.register("passthrough", PassthroughStep)
     registry.register("filter_even", FilterEvenStep)
 
     if mode == "slow":
         config = PipelineConfig(
-            pipeline=[StepConfig(type="slow", sleep_seconds=0.5)],
+            pipeline=[
+                StepConfig(type="source", items=list(range(100))),
+                StepConfig(type="slow", sleep_seconds=0.5),
+            ],
             execution=ExecutionConfig(workers=1, queue_size=100, chunk_size=10),
         )
-        items = iter(range(100))
     elif mode == "filter":
         config = PipelineConfig(
-            pipeline=[StepConfig(type="filter_even")],
+            pipeline=[
+                StepConfig(type="source", items=list(range(20))),
+                StepConfig(type="filter_even"),
+            ],
             execution=ExecutionConfig(workers=1, queue_size=100, chunk_size=50),
         )
-        items = iter(range(20))
     else:
         config = PipelineConfig(
-            pipeline=[StepConfig(type="passthrough")],
+            pipeline=[
+                StepConfig(type="source", items=list(range(10))),
+                StepConfig(type="passthrough"),
+            ],
             execution=ExecutionConfig(workers=1, queue_size=100, chunk_size=50),
         )
-        items = iter(range(10))
 
     stats = StatsCollector()
     engine = PipelineEngine(config=config, registry=registry, stats=stats)
 
-    engine.run(input_items=items, output_dir=output_dir)
+    engine.run(output_dir=output_dir)
 
 
 if __name__ == "__main__":

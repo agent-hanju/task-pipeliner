@@ -7,11 +7,19 @@ import pickle
 from typing import Any
 
 import pytest
-from dummy_steps import CountResult, ErrorOnItemStep, FilterEvenStep, NullResult, PassthroughStep
+from dummy_steps import (
+    CountResult,
+    DummySourceStep,
+    ErrorOnItemStep,
+    FilterEvenStep,
+    NullResult,
+    PassthroughStep,
+)
 
 from task_pipeliner.producers import (
     BaseProducer,
     ErrorSentinel,
+    InputProducer,
     ParallelProducer,
     Sentinel,
     SequentialProducer,
@@ -67,6 +75,94 @@ class TestSentinel:
         assert is_sentinel("not a sentinel") is False
         assert is_sentinel(42) is False
         assert is_sentinel(None) is False
+
+
+# ---------------------------------------------------------------------------
+# InputProducer tests (W-R02)
+# ---------------------------------------------------------------------------
+
+
+class TestInputProducer:
+    """InputProducer: feeds items from a SOURCE step into output queues."""
+
+    @pytest.mark.timeout(10)
+    def test_feeds_items_from_step(self) -> None:
+        """InputProducer should iterate step.items() and put into output queues."""
+        ctx = multiprocessing.get_context("spawn")
+        out_q: multiprocessing.Queue[Any] = ctx.Queue()
+        stats = StatsCollector()
+        step = DummySourceStep(items=[1, 2, 3])
+        stats.register(step.name)
+
+        producer = InputProducer(step=step, output_queues=[out_q], stats=stats)
+        producer.run()
+
+        collected = []
+        while True:
+            obj = out_q.get(timeout=2)
+            if is_sentinel(obj):
+                break
+            collected.append(obj)
+
+        assert collected == [1, 2, 3]
+
+    @pytest.mark.timeout(10)
+    def test_increments_passed_stat(self) -> None:
+        """InputProducer should increment 'passed' for each item."""
+        ctx = multiprocessing.get_context("spawn")
+        out_q: multiprocessing.Queue[Any] = ctx.Queue()
+        stats = StatsCollector()
+        step = DummySourceStep(items=[10, 20, 30])
+        stats.register(step.name)
+
+        producer = InputProducer(step=step, output_queues=[out_q], stats=stats)
+        producer.run()
+
+        assert stats._stats[step.name].passed == 3
+
+    @pytest.mark.timeout(10)
+    def test_calls_step_close(self) -> None:
+        """InputProducer should call step.close() after iteration."""
+        ctx = multiprocessing.get_context("spawn")
+        out_q: multiprocessing.Queue[Any] = ctx.Queue()
+        stats = StatsCollector()
+        step = DummySourceStep(items=[1])
+        stats.register(step.name)
+
+        producer = InputProducer(step=step, output_queues=[out_q], stats=stats)
+        producer.run()
+
+        assert step.closed is True
+
+    @pytest.mark.timeout(10)
+    def test_sends_sentinel_after_items(self) -> None:
+        """InputProducer should send Sentinel to all output queues after items."""
+        ctx = multiprocessing.get_context("spawn")
+        out_q1: multiprocessing.Queue[Any] = ctx.Queue()
+        out_q2: multiprocessing.Queue[Any] = ctx.Queue()
+        stats = StatsCollector()
+        step = DummySourceStep(items=[])
+        stats.register(step.name)
+
+        producer = InputProducer(step=step, output_queues=[out_q1, out_q2], stats=stats)
+        producer.run()
+
+        assert is_sentinel(out_q1.get(timeout=2))
+        assert is_sentinel(out_q2.get(timeout=2))
+
+    @pytest.mark.timeout(10)
+    def test_finishes_stats(self) -> None:
+        """InputProducer should call stats.finish() for the step."""
+        ctx = multiprocessing.get_context("spawn")
+        out_q: multiprocessing.Queue[Any] = ctx.Queue()
+        stats = StatsCollector()
+        step = DummySourceStep(items=[1, 2])
+        stats.register(step.name)
+
+        producer = InputProducer(step=step, output_queues=[out_q], stats=stats)
+        producer.run()
+
+        assert stats._stats[step.name].elapsed_seconds is not None
 
 
 # ---------------------------------------------------------------------------

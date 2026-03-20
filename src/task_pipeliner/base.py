@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from enum import Enum
 from pathlib import Path
 from typing import Any, Self
@@ -12,6 +12,7 @@ from typing import Any, Self
 class StepType(Enum):
     PARALLEL = "parallel"
     SEQUENTIAL = "sequential"
+    SOURCE = "source"
 
 
 class BaseResult(ABC):
@@ -55,6 +56,10 @@ class BaseStep[R: BaseResult](ABC):
         atomically merge with previous results.
         """
         ...
+
+    def items(self) -> Generator[Any, None, None]:
+        """SOURCE 스텝 전용. 아이템을 yield한다."""
+        raise NotImplementedError("items() must be implemented by SOURCE steps")
 
     def close(self) -> None:
         """Release resources held by this step.

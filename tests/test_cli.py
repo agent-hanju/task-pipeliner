@@ -58,7 +58,8 @@ class TestPipeline:
         stats_file = output_dir / "stats.json"
         assert stats_file.exists()
         data = orjson.loads(stats_file.read_bytes())
-        assert data[0]["passed"] == 5
+        pt = next(d for d in data if d["step_name"] == "PassthroughStep")
+        assert pt["passed"] == 5
 
     @pytest.mark.timeout(30)
     def test_run_with_config_object(self, tmp_path: Path) -> None:
@@ -80,7 +81,8 @@ class TestPipeline:
         stats_file = output_dir / "stats.json"
         assert stats_file.exists()
         data = orjson.loads(stats_file.read_bytes())
-        assert data[0]["passed"] == 5
+        fe = next(d for d in data if d["step_name"] == "FilterEvenStep")
+        assert fe["passed"] == 5
 
     def test_run_unregistered_step_raises(self, tmp_path: Path) -> None:
         """run() with unregistered step → StepRegistrationError."""
@@ -101,7 +103,7 @@ class TestPipeline:
 # ---------------------------------------------------------------------------
 
 
-class TestFilterCommand:
+class TestRunCommand:
     @staticmethod
     def _pipeline_obj() -> dict[str, Pipeline]:
         p = Pipeline()
@@ -110,8 +112,8 @@ class TestFilterCommand:
         return {"pipeline": p}
 
     @pytest.mark.timeout(30)
-    def test_filter_end_to_end(self, tmp_path: Path) -> None:
-        """filter command → exit_code 0, kept.jsonl exists."""
+    def test_run_end_to_end(self, tmp_path: Path) -> None:
+        """run command → exit_code 0, stats.json exists."""
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
             yaml.dump(
@@ -130,7 +132,7 @@ class TestFilterCommand:
         result = runner.invoke(
             main,
             [
-                "filter",
+                "run",
                 "--config",
                 str(config_path),
                 "--input",
@@ -146,12 +148,12 @@ class TestFilterCommand:
     @pytest.mark.parametrize(
         "args,match",
         [
-            (["filter", "--config", "nonexistent.yaml"], "does not exist"),
-            (["filter", "--output", "/tmp/out"], "Missing option"),
+            (["run", "--config", "nonexistent.yaml"], "does not exist"),
+            (["run", "--output", "/tmp/out"], "Missing option"),
         ],
         ids=["bad_yaml", "missing_config"],
     )
-    def test_filter_bad_args(self, args: list[str], match: str) -> None:
+    def test_run_bad_args(self, args: list[str], match: str) -> None:
         """Invalid args → non-zero exit code + error message."""
         runner = CliRunner()
         result = runner.invoke(main, args)
@@ -159,7 +161,7 @@ class TestFilterCommand:
         assert match.lower() in (result.output + (result.stderr or "")).lower()
 
     @pytest.mark.timeout(30)
-    def test_filter_unregistered_step(self, tmp_path: Path) -> None:
+    def test_run_unregistered_step(self, tmp_path: Path) -> None:
         """Config references unregistered step → non-zero exit + message."""
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
@@ -174,7 +176,7 @@ class TestFilterCommand:
         result = runner.invoke(
             main,
             [
-                "filter",
+                "run",
                 "--config",
                 str(config_path),
                 "--input",

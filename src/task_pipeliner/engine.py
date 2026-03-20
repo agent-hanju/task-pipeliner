@@ -7,13 +7,12 @@ import multiprocessing
 import pickle
 import signal
 import threading
-from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
 from task_pipeliner.base import BaseResult, BaseStep, StepType
 from task_pipeliner.config import PipelineConfig
-from task_pipeliner.exceptions import StepRegistrationError
+from task_pipeliner.exceptions import ConfigValidationError, StepRegistrationError
 from task_pipeliner.producers import (
     InputProducer,
     ParallelProducer,
@@ -100,7 +99,6 @@ class PipelineEngine:
     def run(
         self,
         *,
-        input_items: Generator[Any, None, None] | Any,
         output_dir: Path,
     ) -> None:
         """Build and execute the full pipeline."""
@@ -124,31 +122,48 @@ class PipelineEngine:
             extra = step_cfg.model_extra or {}
             step_instances.append(cls(**extra))
 
-        # Build queue chain: N queues for N steps
-        # InputProducer → Q0 → Step0 → Q1 → ... → QN-2 → StepN-1 (no output)
-        n_steps = len(step_instances)
+        # Validate SOURCE step placement
+        source_indices = [i for i, s in enumerate(step_instances) if s.step_type == StepType.SOURCE]
+        if not source_indices:
+            raise ConfigValidationError(
+                "Pipeline must have a SOURCE step as the first step",
+                field="pipeline",
+            )
+        if source_indices != [0]:
+            raise ConfigValidationError(
+                "SOURCE step must be the first step in the pipeline",
+                field="pipeline",
+            )
+
+        source_step = step_instances[0]
+        processing_steps = step_instances[1:]
+
+        # Build queue chain: N-1 queues for N steps
+        # SOURCE → Q0 → Step1 → Q1 → ... → StepN-1 (no output)
+        n_processing = len(processing_steps)
         queues: list[multiprocessing.Queue[Any]] = []
-        for _ in range(n_steps):
+        for _ in range(n_processing):
             queues.append(ctx.Queue(maxsize=self.config.execution.queue_size))
 
-        # Result queues — one per step
-        result_queues: list[multiprocessing.Queue[Any]] = [ctx.Queue() for _ in step_instances]
+        # Result queues — one per processing step
+        result_queues: list[multiprocessing.Queue[Any]] = [ctx.Queue() for _ in processing_steps]
 
-        # Register stats for each step
+        # Register stats for all steps (including source)
         for step in step_instances:
             self.stats.register(step.name)
 
-        # InputProducer feeds into first queue
+        # InputProducer feeds SOURCE step items into first queue
         input_producer = InputProducer(
-            input_items=input_items,
-            output_queues=[queues[0]],
+            step=source_step,
+            output_queues=[queues[0]] if queues else [],
+            stats=self.stats,
         )
 
-        # Build step producers
+        # Build step producers for processing steps
         producers: list[SequentialProducer | ParallelProducer] = []
-        for i, step in enumerate(step_instances):
+        for i, step in enumerate(processing_steps):
             in_q = queues[i]
-            out_qs = [queues[i + 1]] if i < n_steps - 1 else []
+            out_qs = [queues[i + 1]] if i < n_processing - 1 else []
             rq = result_queues[i]
             if step.step_type == StepType.PARALLEL:
                 producers.append(
@@ -239,9 +254,9 @@ class PipelineEngine:
                 try:
                     result: BaseResult = rq.get(timeout=2)
                     result.write(output_dir)
-                    logger.debug("result written for step %s", step_instances[i].name)
+                    logger.debug("result written for step %s", processing_steps[i].name)
                 except _queue.Empty:
-                    logger.debug("no result for step %s", step_instances[i].name)
+                    logger.debug("no result for step %s", processing_steps[i].name)
 
             # Write stats
             self.stats.write_json(output_dir / "stats.json")

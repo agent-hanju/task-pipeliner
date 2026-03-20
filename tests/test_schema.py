@@ -98,6 +98,7 @@ class TestStepType:
     def test_enum_values(self) -> None:
         assert StepType.PARALLEL.value == "parallel"
         assert StepType.SEQUENTIAL.value == "sequential"
+        assert StepType.SOURCE.value == "source"
 
 
 class TestBaseResult:
@@ -188,6 +189,31 @@ class TestBaseStep:
         assert collected == ["hello", "hello"]
         assert isinstance(result, _DummyResult)
         assert result.count == 1
+
+    def test_items_raises_not_implemented_by_default(self) -> None:
+        """Non-SOURCE steps should raise NotImplementedError on items()."""
+
+        class NormalStep(BaseStep[_NoOpResult]):
+            step_type = StepType.PARALLEL
+
+            def process(self, item: Any, state: Any, emit: Any) -> _NoOpResult:
+                return _NoOpResult()
+
+        step = NormalStep()
+        with pytest.raises(NotImplementedError):
+            list(step.items())
+
+    def test_close_is_noop_by_default(self) -> None:
+        """close() should be callable without error (no-op)."""
+
+        class NormalStep(BaseStep[_NoOpResult]):
+            step_type = StepType.PARALLEL
+
+            def process(self, item: Any, state: Any, emit: Any) -> _NoOpResult:
+                return _NoOpResult()
+
+        step = NormalStep()
+        step.close()  # should not raise
 
 
 class TestBaseAggStep:

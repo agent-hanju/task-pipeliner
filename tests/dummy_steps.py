@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self
@@ -51,6 +51,27 @@ class CountResult(BaseResult):
 # ---------------------------------------------------------------------------
 # Dummy steps
 # ---------------------------------------------------------------------------
+
+
+class DummySourceStep(BaseStep[NullResult]):
+    """SOURCE step that yields a fixed list of items."""
+
+    def __init__(self, items: list[Any] | None = None) -> None:
+        self._items = items or []
+        self.closed = False
+
+    @property
+    def step_type(self) -> StepType:
+        return StepType.SOURCE
+
+    def items(self) -> Generator[Any, None, None]:
+        yield from self._items
+
+    def process(self, item: Any, state: Any, emit: Callable[[Any], None]) -> NullResult:
+        raise NotImplementedError("SOURCE step does not process")
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class PassthroughStep(BaseStep[NullResult]):

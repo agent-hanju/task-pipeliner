@@ -1,4 +1,4 @@
-"""Click-based CLI: filter / batch subcommands."""
+"""Click-based CLI: run / batch subcommands."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def main(ctx: click.Context) -> None:
         ctx.obj["pipeline"] = Pipeline()
 
 
-@main.command("filter")
+@main.command("run")
 @click.option(
     "--config",
     "config_path",
@@ -50,14 +50,14 @@ def main(ctx: click.Context) -> None:
     help="Override worker count from config.",
 )
 @click.pass_context
-def filter_cmd(
+def run_cmd(
     ctx: click.Context,
     config_path: Path,
     inputs: tuple[Path, ...],
     output_dir: Path,
     workers: int | None,
 ) -> None:
-    """Run a filter pipeline on the given inputs."""
+    """Run a pipeline on the given inputs."""
     logging.basicConfig(level=logging.INFO)
     pipeline: Pipeline = ctx.obj["pipeline"]
 

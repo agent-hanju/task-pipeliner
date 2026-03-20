@@ -42,6 +42,13 @@ class TestPublicAPI:
         assert StepRegistrationError is not None
         assert ConfigValidationError is not None
 
+    def test_io_classes_importable(self) -> None:
+        from task_pipeliner import JsonlReader, JsonlSourceStep, JsonlWriter
+
+        assert JsonlReader is not None
+        assert JsonlWriter is not None
+        assert JsonlSourceStep is not None
+
     def test_all_completeness(self) -> None:
         """__all__ contains all expected public symbols."""
         expected = {
@@ -53,6 +60,9 @@ class TestPublicAPI:
             "InputProducer",
             "ParallelProducer",
             "SequentialProducer",
+            "JsonlReader",
+            "JsonlWriter",
+            "JsonlSourceStep",
             "PipelineError",
             "StepRegistrationError",
             "ConfigValidationError",

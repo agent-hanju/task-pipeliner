@@ -6,6 +6,7 @@ from task_pipeliner.exceptions import (
     PipelineError,
     StepRegistrationError,
 )
+from task_pipeliner.io import JsonlReader, JsonlSourceStep, JsonlWriter
 from task_pipeliner.pipeline import Pipeline
 from task_pipeliner.producers import InputProducer, ParallelProducer, SequentialProducer
 
@@ -18,6 +19,9 @@ __all__ = [
     "InputProducer",
     "ParallelProducer",
     "SequentialProducer",
+    "JsonlReader",
+    "JsonlWriter",
+    "JsonlSourceStep",
     "PipelineError",
     "StepRegistrationError",
     "ConfigValidationError",

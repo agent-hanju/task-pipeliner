@@ -5,12 +5,14 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from task_pipeliner.config import PipelineConfig, load_config
+from task_pipeliner.config import PipelineConfig, StepConfig, load_config
 from task_pipeliner.engine import PipelineEngine, StepRegistry
-from task_pipeliner.io import JsonlReader
+from task_pipeliner.io import JsonlSourceStep
 from task_pipeliner.stats import StatsCollector
 
 logger = logging.getLogger(__name__)
+
+_JSONL_SOURCE_TYPE = "_jsonl_source"
 
 
 class Pipeline:
@@ -46,16 +48,25 @@ class Pipeline:
         else:
             cfg = config
 
+        # Inject JSONL SOURCE step at the beginning of the pipeline
+        source_cfg = StepConfig(type=_JSONL_SOURCE_TYPE, paths=[str(p) for p in inputs])  # type: ignore[call-arg]
+        cfg = PipelineConfig(
+            pipeline=[source_cfg, *cfg.pipeline],
+            execution=cfg.execution,
+        )
+
         stats = StatsCollector()
         stats.setup_log_handler(output_dir / "pipeline.log")
 
         try:
+            # Register the internal JSONL source step
+            self._registry.register(_JSONL_SOURCE_TYPE, JsonlSourceStep)
             engine = PipelineEngine(config=cfg, registry=self._registry, stats=stats)
-            reader = JsonlReader(inputs)
-            input_items = reader.read()
 
-            engine.run(input_items=input_items, output_dir=output_dir)
+            engine.run(output_dir=output_dir)
 
             logger.info("pipeline run completed config=%s", config)
         finally:
+            # Remove internal registration to avoid duplicate on re-use
+            self._registry._registry.pop(_JSONL_SOURCE_TYPE, None)
             stats.flush()
