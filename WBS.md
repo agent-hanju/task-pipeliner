@@ -1,490 +1,275 @@
-# WBS: Tagged Output — 파이프라인 분기 지원
+# WBS: Step Metrics, Queue 안정화, State 활용
 
-> 이전 WBS: `docs/WBS-v2.md`
+> 기반 문서: `docs/refactoring-step-metrics.md`
+> 작성일: 2026-03-20 | 갱신일: 2026-03-20
 
----
+## 개발 방법론
 
-## WBS 기반 개발 방법론
-
-### 진행 원칙 (TDD)
-
-각 작업 단위는 아래 순서를 **반드시** 지킨다. 어떤 단계도 건너뛰지 않는다.
-
-1. **레퍼런스 탐색** — 코드 작성 전, 해당 단위에서 사용하는 라이브러리(예: Pydantic v2, orjson, click, multiprocessing spawn)의 웹 문서를 검색해 API 사용법이 설치된 버전과 일치하는지 확인한다. 또한 비슷한 기능, 패턴을 동일한 기술 스택 기반으로 검색하여 검증된 프로그래밍 패턴을 파악하고 참고한다. 비자명한 사항은 기록해 둔다.
-2. **인터페이스 확인** — 본 WBS의 인터페이스 스펙을 확인한다.
-3. **테스트 작성** — 테스트를 먼저 작성한다. 실행하여 실패(red)를 확인한다.
-4. **구현** — 테스트를 통과시키기 위한 최소한의 코드를 작성한다.
-5. **테스트 통과 확인** — pytest를 실행한다. 모든 테스트가 green이어야 한다.
-6. **린트 & 타입 검사** — ruff와 mypy를 실행한다. 모든 오류를 해결한 뒤 다음으로 넘어간다.
-7. **WBS 업데이트** — 본 문서에서 완료된 세부 단계를 체크한다.
-
-각 작업 단위는 이전 단계의 테스트가 전부 통과한 뒤 진행한다.
-테스트 실행 시 항상 `--timeout=30` 플래그를 사용해 데드락을 감지한다.
-
-```bash
-# 5단계: 테스트
-.venv/Scripts/pytest --timeout=30 -v
-
-# 6단계: 린트 & 타입
-.venv/Scripts/ruff check src tests
-.venv/Scripts/ruff format --check src tests
-.venv/Scripts/mypy src
-```
-
-### 개발 단계 (Phase)
-
-```
-Phase 1 — 코어 인터페이스: base.py (outputs 선언, emit 시그니처 변경)
-Phase 2 — 큐 라우팅: producers.py, engine.py (태그별 큐 생성·라우팅)
-Phase 3 — 설정 스키마: config.py (outputs 매핑 지원)
-Phase 4 — 파사드·CLI: pipeline.py, cli.py (변경 전파)
-Phase 5 — 테스트 수정
-Phase 6 — 샘플 프로젝트(taxonomy-converter) 적용
-```
-
-### WBS 체크박스 관리
-
-진행 상황은 체크박스로 추적한다. 각 작업 단위에는 **세부 체크리스트**가 있다.
-
-- **세부 단계 체크**: 해당 단계가 완료되면 체크 (예: `[x] 테스트 통과`)
-- **최상위 박스 체크**: **모든** 세부 단계가 체크된 경우에만
-- **작업 시작 전**: 전제 작업 단위의 최상위 박스가 모두 체크됐는지 확인 후 착수
-- 구현만 완료된 상태에서 체크 금지 — 테스트 + 린트 + 타입 모두 통과해야 함
-
-체크 전 실행할 검증 명령어:
-
-```bash
-.venv/Scripts/pytest --timeout=30 -v        # 전체 green 확인
-.venv/Scripts/ruff check src tests           # 린트 오류 없음
-.venv/Scripts/ruff format --check src tests  # 포맷 OK
-.venv/Scripts/mypy src                       # 타입 오류 없음
-```
+CLAUDE.md TDD 절차 준수:
+1. 레퍼런스 탐색 → 2. 테스트 작성 → 3. 구현 → 4. 테스트 통과 → 5. 린트/타입 → 6. WBS 갱신
 
 ---
 
-## 리팩토링 배경
+## Phase 1: 큐 안정화
 
-### 현재 상태
+### M-01: `maxsize=0` 전환
+> 모든 큐를 무제한으로 전환하여 데드락/백프레셔 우회 문제를 근본적으로 해결.
 
-현재 파이프라인은 **선형 큐 체인**만 지원한다:
-
-```
-SOURCE → Q0 → Step1 → Q1 → Step2 → ... → StepN (output_queues=[])
-```
-
-- `emit(item)` 호출 시 다음 스텝의 큐에만 전달
-- 스텝이 아이템을 건너뛰면(emit 미호출) 해당 아이템은 소실
-- 특정 스텝의 큐로 직접 보내는 방법 없음
-- 출력이 없는 terminal 스텝(WriterStep 등)도 `emit` 콜백을 받지만 사용하지 않음
-
-### 목표
-
-**Tagged Output** 패턴을 도입하여:
-
-1. 스텝이 여러 이름의 출력으로 아이템을 분기할 수 있게 한다
-2. 출력이 없는 terminal 스텝을 자연스럽게 표현한다
-
-```
-PreprocessStep ──kept──→ ConvertStep
-               └─removed──→ WriterStep (terminal, outputs 없음)
-```
-
-### 설계 원칙
-
-1. **`outputs`를 선언한 스텝만 emit 가능** — `outputs = ()`이면 emit 불가 (terminal step)
-2. **emit 시 태그 필수** — `emit(item, "kept")`. 기본값 없음
-3. **Config가 토폴로지를 결정** — 어떤 output tag가 어떤 스텝의 입력 큐로 가는지 선언
-4. **하나의 출력에 여러 downstream 가능** — fan-out (`kept: [convert, audit_logger]`)
-5. **미연결 출력은 버린다** — config에 연결 안 된 output tag로 emit하면 무시
-
-### 레퍼런스
-
-| 프레임워크 | 패턴 | 핵심 API |
-|---|---|---|
-| Apache Beam | Tagged Side Output | `yield TaggedOutput(tag, item)` |
-| Apache Flink | OutputTag | `ctx.output(tag, item)` |
-| Dagster | Named Output | `yield Output(item, output_name=tag)` |
-| Kafka Streams | Predicate Split | `split().branch(predicate, name)` |
-
-→ **Tagged Emit** (Beam/Flink/Dagster 방식) 채택. 스텝 내부에서 태그 지정, 파이프라인 config에서 연결.
+- [ ] 레퍼런스 탐색
+- [ ] engine.py 큐 생성부 수정 (3곳: line 212, 228, 236) — `ctx.Queue(maxsize=queue_size)` → `ctx.Queue()`
+- [ ] config.py `ExecutionConfig.queue_size` 기본값 0으로 변경, docstring에 "향후 디스크 스필 임계치 전용" 명시
+- [ ] 기존 테스트 통과 확인
+- [ ] 린트/타입 통과
+- 의존: 없음
 
 ---
 
-## 의존 관계 맵
+## Phase 2: State 메커니즘 활용
 
-```
-[W-T01 base.py] ──▶ [W-T02 producers.py] ──▶ [W-T03 engine.py]
-                                                     │
-                            ┌────────────────────────┤
-                            ▼                        ▼
-                   [W-T04 config.py]        [W-T05 pipeline.py + cli.py]
-                            │                        │
-                            └────────┬───────────────┘
-                                     ▼
-                            [W-T06 프레임워크 테스트]
-                                     │
-                                     ▼
-                            [W-T07 taxonomy-converter 적용]
-```
-
----
-
-## Phase 1 — 코어 인터페이스
-
-### - [x] W-T01 `base.py` — outputs 선언 + emit 시그니처 변경
-
-**파일**: `src/task_pipeliner/base.py`
-**의존**: 없음
-
-- [x] `BaseStep.outputs` 클래스 변수 추가 (기본값: `()` — 빈 튜플, emit 불가)
-- [x] `emit` 콜백 타입을 `Callable[[Any, str], None]`으로 변경 (tag 필수, 기본값 없음)
-- [x] `process()` 시그니처에서 `emit`은 유지하되, `outputs = ()`인 스텝에서 호출 시 에러
-- [x] `process()` 독스트링에 `emit(item, "tag")` 사용법 명시
-- [x] 기존 테스트 통과 확인
-- [x] ruff / mypy 통과
+### M-02: `BaseStep.initial_state` 프로퍼티 추가
+> Step이 필요로 하는 초기 state를 선언할 수 있도록 프로퍼티를 추가.
 
 ```python
-class BaseStep(ABC, Generic[R]):
-    outputs: ClassVar[tuple[str, ...]] = ()  # 빈 튜플 = terminal step
+# BaseStep에 추가
+@property
+def initial_state(self) -> Any:
+    """Return the initial state object for this step.
 
-    @abstractmethod
-    def process(
-        self,
-        item: Any,
-        state: Any,
-        emit: Callable[[Any, str], None],
-    ) -> R:
-        """Process single item.
-
-        emit(item, "kept") → "kept" 출력으로 전달
-        emit(item, "removed") → "removed" 출력으로 전달
-
-        outputs = ()인 스텝에서 emit을 호출하면 RuntimeError.
-        선언하지 않은 tag로 emit하면 config에 연결이 없으면 무시.
-        """
-        ...
+    Override in subclasses that need mutable state passed to process().
+    The returned object is passed as the ``state`` argument to every
+    ``process()`` call. For SEQUENTIAL steps, it is the same object
+    across all calls (accumulated in-place).
+    """
+    return None
 ```
 
-> **기존 코드와의 차이**: 기존 `emit(item)`은 인자 1개, 새 `emit(item, tag)`는 인자 2개.
-> 기존 `emit(item)` 호출은 모두 `emit(item, "tag_name")`으로 변경해야 한다.
-> `outputs = ()`인 스텝(WriterStep 등)은 `emit`을 호출하지 않으므로 변경 불필요.
+- [ ] 레퍼런스 탐색
+- [ ] 테스트 작성 (dummy step with initial_state, 기본값 None 검증)
+- [ ] base.py에 `initial_state` 프로퍼티 추가
+- [ ] 테스트 통과
+- [ ] 린트/타입 통과
+- 의존: 없음
+
+### M-03: Engine에서 `state=step.initial_state` 전달
+> Producer 생성 시 step의 `initial_state`를 `state` 인자로 전달.
+
+- [ ] engine.py Producer 생성부 수정 (SequentialProducer, ParallelProducer 모두)
+- [ ] state가 process()에 전달되는지 통합 테스트 추가 (dummy step이 state를 mutate하고 검증)
+- [ ] 테스트 통과
+- [ ] 린트/타입 통과
+- 의존: M-02
 
 ---
 
-## Phase 2 — 큐 라우팅
+## Phase 3: StepStats 확장 (데이터 모델)
 
-### - [x] W-T02 `producers.py` — 태그별 큐 라우팅
+### M-04: StepStats 타이밍 필드 추가
+- [ ] 테스트 작성 (`tests/test_stats.py`)
+  - `first_item_at` 초기값 None, 설정 후 값 존재
+  - `processing_ns`, `idle_ns`, `idle_count` 초기값 0
+  - `current_state` 초기값 `"waiting"`
+  - `to_dict()` 에 신규 키 포함 확인
+  - 기존 `test_to_dict_keys` 갱신
+- [ ] 구현: `StepStats` dataclass에 필드 추가
+- [ ] 구현: `to_dict()` 확장 — `initial_wait_seconds`, `processing_seconds`, `processing_avg_ms`, `idle_seconds`, `idle_avg_ms` 산출
+- [ ] 린트/타입 통과
+- 의존: 없음
 
-**파일**: `src/task_pipeliner/producers.py`
-**의존**: W-T01
-
-- [x] `output_queues` 타입을 `list[Queue]` → `dict[str, list[Queue]]`로 변경 (tag → queues)
-- [x] `_make_emit()` 수정:
-  - `outputs = ()`인 스텝: emit 호출 시 `RuntimeError` raise
-  - 미연결 tag (config에 없음): 무시 (로그 DEBUG)
-  - 연결된 tag: 해당 큐들에 put
-- [x] `InputProducer`의 `output_queues`도 `dict[str, list[Queue]]`로 변경
-- [x] `_send_sentinel()` — 모든 tag의 모든 큐에 sentinel 전송
-- [x] `_parallel_worker`의 emit 버퍼도 태그 지원 (`list[tuple[Any, str]]`)
-- [x] 기존 테스트 통과 확인
-- [x] ruff / mypy 통과
-
-```python
-class BaseProducer(ABC, multiprocessing.Process):
-    def __init__(
-        self,
-        *,
-        step: BaseStep[Any],
-        input_queue: multiprocessing.Queue[Any],
-        output_queues: dict[str, list[multiprocessing.Queue[Any]]],  # tag → [queues]
-        ...
-    ) -> None: ...
-
-    def _make_emit(self) -> Callable[[Any, str], None]:
-        queues_by_tag = self.output_queues
-        step_name = self.step.name
-        step_outputs = self.step.outputs
-        stats = self.stats
-
-        def emit(item: Any, tag: str) -> None:
-            if not step_outputs:
-                raise RuntimeError(
-                    f"Step '{step_name}' has no declared outputs — emit() not allowed"
-                )
-            tag_queues = queues_by_tag.get(tag)
-            if tag_queues is None:
-                logger.debug("unconnected tag=%s step=%s — dropped", tag, step_name)
-                return
-            for q in tag_queues:
-                q.put(item)
-            stats.increment(step_name, "passed")
-
-        return emit
-
-    def _send_sentinel(self) -> None:
-        sentinel = Sentinel()
-        seen: set[int] = set()  # 중복 큐 방지 (fan-in으로 같은 큐가 여러 tag에 등장할 수 있음)
-        for tag_queues in self.output_queues.values():
-            for q in tag_queues:
-                qid = id(q)
-                if qid not in seen:
-                    q.put(sentinel)
-                    seen.add(qid)
-```
-
-> **주의**: `_parallel_worker`는 module-level 함수이므로 `output_queues` dict를 global로 전달하는 방식도 변경 필요.
-> worker 내부에서는 emit 버퍼가 `list[tuple[Any, str]]`이 되고, chunk 완료 후 tag별로 큐에 bulk put.
+### M-05: StatsCollector API 확장
+- [ ] 테스트 작성 (`tests/test_stats.py`)
+  - `set_total_items(n)` → `total_items` 속성 반환
+  - `record_first_item(step_name)` → `first_item_at` 설정, 중복 호출 시 무시
+  - `add_processing_ns(step_name, ns)` → `processing_ns` 누적
+  - `add_idle_ns(step_name, ns)` → `idle_ns` 누적, `idle_count` +1
+  - `set_state(step_name, state)` → `current_state` 갱신
+  - `write_json()` 결과에 신규 필드 포함 확인
+- [ ] 구현: 각 메서드 추가 (기존 `_lock` 활용)
+- [ ] 린트/타입 통과
+- 의존: M-04
 
 ---
 
-### - [x] W-T03 `engine.py` — DAG 큐 빌더
+## Phase 4: Producer 계측
 
-**파일**: `src/task_pipeliner/engine.py`
-**의존**: W-T02
+### M-06: SequentialProducer 타이밍 계측
+- [ ] 테스트 작성 (`tests/test_engine.py`)
+  - 파이프라인 실행 후 SEQUENTIAL step의 `processing_ns > 0` 확인
+  - `first_item_at is not None` 확인
+  - `current_state == "done"` 확인
+- [ ] 구현: `SequentialProducer.run()` 내 계측 코드 삽입
+  - `input_queue.get()` 전후 시간 측정 → `add_idle_ns`
+  - `step.process()` 전후 시간 측정 → `add_processing_ns`
+  - 첫 아이템 시 `record_first_item`, 이후 대기시간만 `add_idle_ns`
+  - `set_state` 호출 (idle → processing → done)
+- [ ] 린트/타입 통과
+- 의존: M-05
 
-- [x] 선형 큐 체인 제거 → config의 `outputs` 매핑 기반 큐 생성
-- [x] 큐 생성 로직: config의 outputs 매핑을 순회하며 `(source_step, tag) → target_step` 연결마다 큐 생성
-- [x] `outputs` 미선언 스텝 (`outputs = ()`) → 출력 큐 없음 (terminal)
-- [x] `outputs`를 선언했지만 config에 매핑이 없는 tag → 큐 미생성 (emit 시 silent drop)
-- [x] 복수 입력 큐: 하나의 스텝이 여러 upstream에서 아이템을 받을 수 있음
-- [x] 복수 입력 큐 소비 전략: 모든 입력 큐에서 sentinel이 도착해야 스텝 종료
-- [x] SOURCE 스텝 검증 로직 유지
-- [x] sentinel 주입 (graceful shutdown) — 모든 큐에 sentinel
-- [x] 기존 테스트 통과 확인
-- [x] ruff / mypy 통과
+### M-07: ParallelProducer 구조 변경 + 타이밍 계측
+- [ ] 테스트 작성 (`tests/test_engine.py`)
+  - PARALLEL step 실행 중 `processed`가 점진적으로 증가함 확인 (sentinel 후 일괄 점프 아님)
+  - 파이프라인 실행 후 PARALLEL step의 `processing_ns > 0` 확인
+  - `first_item_at is not None` 확인
+  - 기존 통합 테스트 회귀 없음 확인
+- [ ] 구현: result collection 인터리빙 — `ParallelProducer.run()`
+  - 현재: sentinel 수신 후 `as_completed(futures)` 일괄 수거
+  - 수정: 청크 submit 사이에 `f.done()` 체크하여 완료된 future 즉시 수거
+  - `_collect_chunk_result()` 헬퍼로 통계 갱신 로직 추출
+- [ ] 구현: `_parallel_worker` 반환값에 `processing_ns` 추가
+- [ ] 구현: `ParallelProducer.run()` 메인 스레드 계측
+  - `input_queue.get()` 대기시간 측정 → `add_idle_ns`
+  - 워커 결과에서 `processing_ns` 집계 → `add_processing_ns`
+  - `set_state` 호출
+- [ ] 린트/타입 통과
+- 의존: M-05
 
-큐 구조 (예시):
-
-```
-LoaderStep(SOURCE)
-  outputs: ("main",)
-  config outputs: { main: preprocess }
-  → Q_preprocess 생성
-
-PreprocessStep
-  outputs: ("kept", "removed")
-  config outputs: { kept: convert, removed: writer }
-  input: Q_preprocess
-  → Q_convert, Q_writer_removed 생성
-
-ConvertStep
-  outputs: ("kept",)
-  config outputs: { kept: deduplicate }
-  input: Q_convert
-  → Q_dedup 생성
-
-DeduplicateStep
-  outputs: ("kept",)
-  config outputs: { kept: writer }
-  input: Q_dedup
-  → Q_writer_kept 생성
-
-WriterStep
-  outputs: ()  ← terminal
-  inputs: [Q_writer_kept, Q_writer_removed]  ← 복수 입력 큐
-```
-
-> **복수 입력 큐 소비**: 하나의 스텝이 여러 upstream에서 아이템을 받을 수 있다.
-> 각 입력 큐를 별도 스레드로 소비하거나, 단일 스레드에서 select 방식으로 소비.
-> 모든 입력 큐에서 sentinel이 도착해야 해당 스텝이 종료된다.
+### M-08: InputProducer 계측 + 총 입력 수 산출
+- [ ] 테스트 작성
+  - SOURCE step의 `current_state == "done"` 확인
+  - `first_item_at` 설정 확인
+  - `stats.total_items > 0` 확인
+- [ ] 구현: `InputProducer.run()` 계측 (record_first_item, set_state)
+- [ ] 구현: `io.py`에 `count_jsonl_lines(paths) -> int` 추가 (바이너리 모드)
+- [ ] 구현: `pipeline.py`의 `run()` 시작부에 라인 카운트 → `stats.set_total_items()`
+- [ ] 린트/타입 통과
+- 의존: M-05
 
 ---
 
-## Phase 3 — 설정 스키마
+## Phase 5: ProgressReporter
 
-### - [x] W-T04 `config.py` — outputs 매핑 스키마
+### M-09: format_progress 포맷팅 함수
+- [ ] 테스트 작성 (`tests/test_progress.py` — 신규)
+  - StatsCollector 스냅샷으로 포맷 문자열 생성 검증
+  - step 순서 유지 확인
+  - 각 step 상태별 표시 형식 검증 (waiting, idle, processing, done)
+  - 건당 평균 시간 포맷 확인 (ms 단위)
+  - processed=0 일 때 avg 표시 안 함
+- [ ] 구현: `src/task_pipeliner/progress.py` 신규 모듈
+  - `format_progress(stats, step_names, elapsed) -> str` — 순수 함수
+- [ ] 린트/타입 통과
+- 의존: M-04
 
-**파일**: `src/task_pipeliner/config.py`
-**의존**: W-T01
-
-- [x] `StepConfig`에 `outputs` 필드 추가: `dict[str, str | list[str]] | None`
-- [x] `outputs`가 `None`이고 스텝의 `outputs`가 비어있으면 정상 (terminal step)
-- [x] `outputs`가 `None`이고 스텝의 `outputs`가 비어있지 않으면 경고 (연결 없는 출력)
-- [x] `str` 값이면 단일 downstream, `list[str]` 값이면 fan-out
-- [x] config validation: outputs에 참조된 스텝 type이 pipeline에 존재하는지 검증
-- [x] `outputs` 필드는 `model_extra`가 아닌 명시적 필드로 선언 (extra에 빠지지 않도록)
-- [x] 기존 테스트 통과 확인
-- [x] ruff / mypy 통과
-
-```python
-class StepConfig(_WrappingModel):
-    model_config = ConfigDict(extra="allow")
-
-    type: str
-    enabled: bool = True
-    outputs: dict[str, str | list[str]] | None = None
-    # 나머지 extra 필드 → step.__init__ kwargs로 전달
+**표시 형식**:
+```
+--- Pipeline Progress (12.3s) -------------------------------------------
+  JsonlSourceStep        372 produced                          [done 1.2s]
+  QualityFilterStep      372 in → 329 kept, 43 removed  1.2ms/item  [done 4.5s]
+  HashComputeStep        329 in → 329 out               0.8ms/item  [processing]
+  HashLookupStep          50 in → 48 kept, 2 removed    0.1ms/item  [idle 0.3s]
+  MinHashComputeStep       0 in                                      [waiting]
+  WriterStep              43 in                          0.0ms/item  [processing]
+-------------------------------------------------------------------------
 ```
 
-config 예시:
+### M-10: ProgressReporter 스레드 클래스
+- [ ] 테스트 작성 (`tests/test_progress.py`)
+  - start/stop 라이프사이클 정상 동작
+  - stop 후 스레드 종료 확인
+  - interval 간격으로 출력 확인 (짧은 interval로 테스트)
+  - stderr 출력 확인 (stdout 아님)
+  - progress.log 파일 생성 및 내용 기록 확인
+  - 매 write 시 flush (tail -f 호환)
+- [ ] 구현: `ProgressReporter(Thread)`
+  - `__init__(stats, step_names, interval=5.0, output_dir=None)`
+  - `run()`: `stop_event.wait(interval)` 루프 → stderr + progress.log 동시 출력
+  - `stop()`: event set, 최종 출력 1회, 파일 핸들 close
+  - daemon=True
+- [ ] 린트/타입 통과
+- 의존: M-09
 
-```yaml
-pipeline:
-  - type: loader
-    paths: [./data]
-    outputs:
-      main: preprocess
-  - type: preprocess
-    min_lines: 2
-    outputs:
-      kept: convert
-      removed: writer
-  - type: convert
-    outputs:
-      kept: deduplicate
-  - type: deduplicate
-    outputs:
-      kept: writer
-  - type: writer
-    dir: ./output
-    # outputs 없음 = terminal step
+### M-11: Engine 통합 + 콘솔 로그 분리
+- [ ] 테스트 작성 (`tests/test_engine.py`)
+  - 파이프라인 실행 시 ProgressReporter 동작 확인 (stderr 캡처)
+  - 파이프라인 완료 후 reporter 스레드 종료 확인
+  - progress.log 파일이 output_dir에 생성됨 확인
+  - 파이프라인 실행 중 task_pipeliner INFO 로그가 콘솔에 출력되지 않음 확인
+  - 파이프라인 완료 후 propagate 원복 확인
+- [ ] 구현: `PipelineEngine.run()` 에서 ProgressReporter 생성/start/stop
+- [ ] 구현: 콘솔 로그 분리 (`propagate` 방식)
+  - `logging.getLogger("task_pipeliner").propagate = False` (실행 중)
+  - finally에서 `propagate = True` 원복
+- [ ] 린트/타입 통과
+- 의존: M-06, M-07, M-08, M-10
+
+---
+
+## Phase 6: 샘플 프로젝트 수정 (pretrain-data-filter)
+
+### M-12: HashLookupStep state 사용
+> `self._seen` 인스턴스 변수를 제거하고 `state` 파라미터를 사용하도록 수정.
+
+- [ ] 테스트 수정/추가 (state로 seen set 전달 검증)
+- [ ] steps.py: `initial_state` 프로퍼티 추가 (`set()` 반환), `process()`에서 `state` 사용, `self._seen` 제거
+- [ ] 테스트 통과 (sample 테스트)
+- [ ] 린트/타입 통과
+- 의존: M-03
+
+### M-13: MinHashLookupStep state 사용
+> `self._lsh`, `self._counter` 인스턴스 변수를 제거하고 `state` 파라미터를 사용하도록 수정.
+
+- [ ] 테스트 수정/추가 (state로 LSH + counter 전달 검증)
+- [ ] steps.py: `initial_state` 프로퍼티 추가 (`(MinHashLSH(...), [0])` 반환), `process()`에서 `state` 사용, `self._lsh`/`self._counter` 제거
+- [ ] 테스트 통과 (sample 테스트)
+- [ ] 린트/타입 통과
+- 의존: M-03
+
+---
+
+## Phase 7: 마무리
+
+### M-14: 통합 테스트 & 검증
+- [ ] sample/pretrain-data-filter 파이프라인 실행하여 실제 progress 출력 확인
+- [ ] progress.log에 실시간 스냅샷 기록 확인
+- [ ] stats.json에 신규 메트릭 포함 확인
+- [ ] 기존 테스트 전체 통과 확인
+- [ ] 린트/타입 전체 통과 확인
+- 의존: M-11, M-12, M-13
+
+### M-15: export 및 문서 갱신
+- [ ] `ProgressReporter`를 `__init__.py`에 export 여부 결정 및 반영
+- [ ] 리팩토링 보고서에 완료 상태 반영
+- 의존: M-14
+
+---
+
+## 의존 관계 요약
+
+```
+M-01 (큐 안정화) ──────────────────────────────────────────┐
+                                                            │
+M-02 (initial_state) → M-03 (engine 연동) → M-12 (Hash)   │
+                                           → M-13 (MinHash)│
+                                                            │
+M-04 (StepStats 필드) → M-05 (StatsCollector API)          │
+                         ├→ M-06 (Sequential 계측)          │
+                         ├→ M-07 (Parallel 계측)            │
+                         └→ M-08 (Input 계측 + 라인카운트)  │
+                                                            │
+M-04 → M-09 (format_progress) → M-10 (Reporter 스레드)     │
+                                                            │
+M-06 + M-07 + M-08 + M-10 → M-11 (Engine 통합 + 로그분리) │
+                                                            │
+M-11 + M-12 + M-13 → M-14 (통합 검증) → M-15 (문서)       │
 ```
 
----
+**병렬 가능 그룹:**
+- M-01, M-02, M-04 — 모두 독립, 동시 착수 가능
+- M-06, M-07, M-08 — M-05 이후 병렬 가능
+- M-12, M-13 — M-03 이후 병렬 가능
+- M-09 — M-04 이후 M-05와 독립적으로 착수 가능
 
-## Phase 4 — 파사드·CLI
+## 출력 채널 정리
 
-### - [x] W-T05 `pipeline.py` + `cli.py` — 변경 전파
-
-**파일**: `src/task_pipeliner/pipeline.py`, `src/task_pipeliner/cli.py`
-**의존**: W-T03, W-T04
-
-- [x] `Pipeline.run()`에서 `JsonlSourceStep` 주입 시 `outputs` 설정 반영
-- [x] CLI 커맨드에 영향 없음 확인 (config가 모든 라우팅을 담당)
-- [x] 기존 테스트 통과 확인
-- [x] ruff / mypy 통과
-
----
-
-## Phase 5 — 테스트 수정
-
-### - [x] W-T06 프레임워크 테스트 전체 수정
-
-**파일**: `tests/` 전체
-**의존**: W-T01 ~ W-T05
-
-#### 신규 테스트
-
-- [x] `test_schema.py` — `BaseStep.outputs` 기본값 `()` 검증
-- [x] `test_queue.py` — 태그별 emit 라우팅 테스트
-  - `emit(item, "kept")` → kept 큐에 전달
-  - `emit(item, "removed")` → removed 큐에 전달
-  - `emit(item, "unknown")` → config에 없으면 무시 (큐에 아무것도 안 감)
-  - `outputs = ()`인 스텝에서 `emit()` 호출 → `RuntimeError`
-  - fan-out: 하나의 tag에 복수 큐 연결 → 양쪽 모두 수신
-- [x] `test_engine.py` — DAG 큐 빌드 테스트
-  - outputs 매핑이 있는 config → 올바른 큐 연결 검증
-  - terminal 스텝 (outputs 없음) → 출력 큐 없이 정상 동작
-  - 미연결 출력 tag → 아이템 소실 확인 (에러 아님)
-  - 복수 입력 큐 → 모든 sentinel 도착 후 종료 확인
-- [x] `test_config.py` — outputs 스키마 검증
-  - `outputs: null` + terminal step → 정상
-  - `outputs: {kept: convert}` → 정상 파싱
-  - `outputs: {kept: [convert, logger]}` → fan-out 파싱
-  - 존재하지 않는 스텝 참조 → validation error
-
-#### 기존 테스트 수정
-
-- [x] `tests/dummy_steps.py` 수정:
-  - 기존 DummyStep들에 `outputs` 선언 추가 (emit을 호출하는 스텝)
-  - `outputs = ()`인 terminal DummyStep 추가
-  - `emit(item)` → `emit(item, "tag")` 호출로 변경
-- [x] 기존 테스트에서 `emit(item)` → `emit(item, "tag")` 호출 변경 반영
-- [x] config에 `outputs` 매핑 추가
-- [x] 전체 pytest 통과
-- [x] ruff / mypy 통과
-
----
-
-## Phase 6 — 샘플 프로젝트 적용
-
-### - [x] W-T07 taxonomy-converter 적용
-
-**파일**: `sample/taxonomy-converter/` 전체
-**의존**: W-T06
-
-- [x] `steps.py` — 각 스텝에 `outputs` 선언:
-  - `LoaderStep.outputs = ("main",)` (SOURCE)
-  - `PreprocessStep.outputs = ("kept", "removed")`
-  - `ConvertStep.outputs = ("kept",)`
-  - `DeduplicateStep.outputs = ("kept",)`
-  - `WriterStep` — outputs 없음 (terminal)
-- [x] `steps.py` — emit 호출 변경:
-  - `PreprocessStep`: `emit(item)` → `emit(item, "kept")`, skip 시 `emit(item, "removed")`
-  - `ConvertStep`: `emit(taxonomy_dict)` → `emit(taxonomy_dict, "kept")`
-  - `DeduplicateStep`: `emit(item)` → `emit(item, "kept")`
-  - `WriterStep`: emit 호출 제거 (이미 없음)
-- [x] `steps.py` — `WriterStep`이 복수 입력(kept + removed)을 받아 파일 분리
-- [x] `pipeline_config.yaml` — outputs 매핑 추가
-
-```yaml
-pipeline:
-  - type: loader
-    paths: [./data]
-    outputs:
-      main: preprocess
-  - type: preprocess
-    min_lines: 2
-    min_chars: 100
-    outputs:
-      kept: convert
-      removed: writer
-  - type: convert
-    dataset_name: naver_econ_news
-    source: HanaTI/NaverNewsEconomy
-    language: korean
-    category: hass
-    industrial_field: finance
-    template: article
-    outputs:
-      kept: deduplicate
-  - type: deduplicate
-    outputs:
-      kept: writer
-  - type: writer
-    dir: ./output
-    format: jsonl
-
-execution:
-  workers: 4
-  queue_size: 200
-  chunk_size: 100
+```
+파이프라인 실행 시:
+  콘솔(stderr)  ← ProgressReporter (카운터 + 상태)  +  WARNING/ERROR 로그만
+  pipeline.log  ← 기존 DEBUG 이상 상세 로그 (변경 없음)
+  progress.log  ← progress 스냅샷 (tail -f 감시용, 매 write flush)
+  stats.json    ← 완료 후 최종 메트릭 (기존 + 신규 타이밍 필드)
 ```
 
-- [x] `run.py` — CLI override에서 outputs 보존 확인
-- [x] 샘플 테스트에서 `kept.jsonl` + `removed.jsonl` 모두 생성 검증
-- [x] ruff 통과
+## TODO: 디스크 스필 큐 (이번 범위 밖)
 
----
-
-## 수정 대상 요약
-
-| 우선순위 | 항목 | 변경 내용 |
-|---------|------|----------|
-| **P0** | `base.py` | `outputs: ClassVar[tuple[str, ...]] = ()`, `emit(item, tag)` 시그니처 (기본값 없음) |
-| **P0** | `producers.py` | `output_queues: dict[str, list[Queue]]`, 태그별 라우팅, terminal 스텝 emit 차단 |
-| **P0** | `engine.py` | DAG 큐 빌더, 복수 입력 큐 소비, config outputs 기반 연결 |
-| **P1** | `config.py` | `StepConfig.outputs` 명시적 필드, 참조 검증 |
-| **P1** | `pipeline.py` | SOURCE 주입 시 outputs 반영 |
-| **P2** | 테스트 | 전면 수정: emit 시그니처, outputs 선언, config outputs 매핑 |
-| **P3** | taxonomy-converter | PreprocessStep removed 출력, WriterStep terminal, config outputs |
-
-### 수정하지 않는 항목
-
-| 항목 | 이유 |
-|------|------|
-| `stats.py` | 기존 `passed`/`errored`/`filtered` 카운터 구조 유지. 태그별 카운트는 향후 별도 작업 |
-| `io.py` | `JsonlReader`/`JsonlWriter`는 유틸리티 — 라우팅과 무관 |
-| `BaseResult` / `BaseAggStep` | 결과 집계 구조는 변경 없음 |
-| `exceptions.py` | 기존 예외 클래스 충분 |
-
-### 주요 설계 결정
-
-| 결정 | 선택 | 근거 |
-|------|------|------|
-| `outputs` 기본값 | `()` (빈 튜플) | terminal step이 자연스러움. WriterStep, DB 저장 등은 emit 불필요 |
-| emit 태그 | 필수 (기본값 없음) | 사용자가 없으므로 하위호환 불필요. 명시적이 더 명확 |
-| `outputs = ()` + emit 호출 | `RuntimeError` | 선언과 동작의 불일치를 빠르게 감지 |
-| 미연결 태그 처리 | 무시 (silent drop) | 에러보다 유연. config에서 필요한 것만 연결 |
-| 복수 입력 큐 | 스텝당 하나의 consumer가 여러 큐를 소비 | fan-in 자연스럽게 지원 |
-| outputs 선언 위치 | 클래스 변수 (`ClassVar`) | 인스턴스 아닌 타입 레벨 계약 |
+> `maxsize=0` 전환으로 데드락은 해결되지만 대용량 처리 시 OOM 위험이 남는다.
+> 이후 별도 WBS로 `DiskSpillQueue` (multiprocessing.Queue 래퍼 + 디스크 오버플로우)를 구현한다.
+> 외부 의존성 없이 표준 라이브러리만 사용. 상세: `docs/refactoring-step-metrics.md` §9 참조.

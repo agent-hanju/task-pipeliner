@@ -51,6 +51,7 @@
 When working under the `sample/` directory, follow each sample project's own `CLAUDE.md` in addition to this file.
 
 - `sample/taxonomy-converter/` — Naver news taxonomy converter (`sample/taxonomy-converter/CLAUDE.md`)
+- `sample/pretrain-data-filter/` — Korean pretrain data quality filter + dedup pipeline (`sample/pretrain-data-filter/CLAUDE.md`)
 
 ## Important Notes
 
