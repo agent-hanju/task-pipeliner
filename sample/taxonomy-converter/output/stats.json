@@ -1,0 +1,46 @@
+[
+  {
+    "elapsed_seconds": 0.074,
+    "emitted": {
+      "main": 438
+    },
+    "errored": 0,
+    "processed": 438,
+    "step_name": "LoaderStep"
+  },
+  {
+    "elapsed_seconds": 0.3805,
+    "emitted": {
+      "kept": 372,
+      "removed": 66
+    },
+    "errored": 0,
+    "processed": 438,
+    "step_name": "PreprocessStep"
+  },
+  {
+    "elapsed_seconds": 0.6444,
+    "emitted": {
+      "kept": 372
+    },
+    "errored": 0,
+    "processed": 372,
+    "step_name": "ConvertStep"
+  },
+  {
+    "elapsed_seconds": 0.6455,
+    "emitted": {
+      "kept": 372
+    },
+    "errored": 0,
+    "processed": 372,
+    "step_name": "DeduplicateStep"
+  },
+  {
+    "elapsed_seconds": 0.6465,
+    "emitted": {},
+    "errored": 0,
+    "processed": 438,
+    "step_name": "WriterStep"
+  }
+]

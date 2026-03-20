@@ -1,0 +1,65 @@
+[
+  {
+    "elapsed_seconds": 0.0347,
+    "emitted": {
+      "main": 372
+    },
+    "errored": 0,
+    "processed": 372,
+    "step_name": "JsonlSourceStep"
+  },
+  {
+    "elapsed_seconds": 1.0436,
+    "emitted": {
+      "kept": 336,
+      "removed": 36
+    },
+    "errored": 0,
+    "processed": 372,
+    "step_name": "QualityFilterStep"
+  },
+  {
+    "elapsed_seconds": 1.9678,
+    "emitted": {
+      "main": 336
+    },
+    "errored": 0,
+    "processed": 336,
+    "step_name": "HashComputeStep"
+  },
+  {
+    "elapsed_seconds": 1.9686,
+    "emitted": {
+      "kept": 336
+    },
+    "errored": 0,
+    "processed": 336,
+    "step_name": "HashLookupStep"
+  },
+  {
+    "elapsed_seconds": 2.9213,
+    "emitted": {
+      "main": 336
+    },
+    "errored": 0,
+    "processed": 336,
+    "step_name": "MinHashComputeStep"
+  },
+  {
+    "elapsed_seconds": 2.9222,
+    "emitted": {
+      "kept": 329,
+      "removed": 7
+    },
+    "errored": 0,
+    "processed": 336,
+    "step_name": "MinHashLookupStep"
+  },
+  {
+    "elapsed_seconds": 2.9236,
+    "emitted": {},
+    "errored": 0,
+    "processed": 372,
+    "step_name": "WriterStep"
+  }
+]

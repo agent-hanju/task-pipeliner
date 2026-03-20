@@ -1,0 +1,32 @@
+pipeline:
+  - type: loader
+    paths:
+      - ./data
+    outputs:
+      main: preprocess
+  - type: preprocess
+    min_lines: 2
+    min_chars: 100
+    outputs:
+      kept: convert
+      removed: writer
+  - type: convert
+    dataset_name: naver_econ_news
+    source: HanaTI/NaverNewsEconomy
+    language: korean
+    category: hass
+    industrial_field: finance
+    template: article
+    outputs:
+      kept: deduplicate
+  - type: deduplicate
+    outputs:
+      kept: writer
+  - type: writer
+    dir: ./output
+    format: jsonl
+
+execution:
+  workers: 4
+  queue_size: 200
+  chunk_size: 100

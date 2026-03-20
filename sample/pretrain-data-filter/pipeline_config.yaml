@@ -1,0 +1,48 @@
+# Pipeline configuration — pretrain-data-filter
+# DAG: quality_filter → hash_compute → hash_lookup → minhash_compute → minhash_lookup → writer
+# Dedup: compute (PARALLEL) → lookup (SEQUENTIAL) 2-stage split
+
+pipeline:
+  - type: quality_filter
+    text_key: text
+    filters:
+      length: { min_chars: 200, min_words: 50 }
+      repetition: { max_dup_line_frac: 0.3 }
+      pii: {}
+    outputs:
+      kept: hash_compute
+      removed: writer
+
+  # --- Exact Dedup: compute (parallel) → lookup (sequential) ---
+  - type: hash_compute
+    text_key: text
+    hash_algo: sha256
+    outputs:
+      main: hash_lookup
+
+  - type: hash_lookup
+    outputs:
+      kept: minhash_compute
+      removed: writer
+
+  # --- MinHash Dedup: compute (parallel) → lookup (sequential) ---
+  - type: minhash_compute
+    text_key: text
+    num_perm: 128
+    ngram_size: 5
+    outputs:
+      main: minhash_lookup
+
+  - type: minhash_lookup
+    threshold: 0.8
+    num_perm: 128
+    outputs:
+      kept: writer
+      removed: writer
+
+  - type: writer
+    # Terminal step — no outputs
+
+execution:
+  workers: 4
+  queue_size: 200

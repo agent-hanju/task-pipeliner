@@ -1,0 +1,91 @@
+2026-03-20 19:41:37,701 DEBUG task_pipeliner.stats:setup_log_handler:81 log handler attached to task_pipeliner logger
+2026-03-20 19:41:37,701 DEBUG task_pipeliner.engine:register:44 name=_jsonl_source cls=JsonlSourceStep
+2026-03-20 19:41:37,701 DEBUG task_pipeliner.engine:register:58 registered step '_jsonl_source'
+2026-03-20 19:41:37,701 DEBUG task_pipeliner.engine:__init__:128 config steps=7 registry=7
+2026-03-20 19:41:37,701 INFO  task_pipeliner.engine:run:143 pipeline started steps=7 workers=4
+2026-03-20 19:41:37,711 DEBUG task_pipeliner.stats:register:53 step_name=JsonlSourceStep
+2026-03-20 19:41:37,711 DEBUG task_pipeliner.stats:register:56 registered step JsonlSourceStep
+2026-03-20 19:41:37,711 DEBUG task_pipeliner.stats:register:53 step_name=QualityFilterStep
+2026-03-20 19:41:37,712 DEBUG task_pipeliner.stats:register:56 registered step QualityFilterStep
+2026-03-20 19:41:37,712 DEBUG task_pipeliner.stats:register:53 step_name=HashComputeStep
+2026-03-20 19:41:37,712 DEBUG task_pipeliner.stats:register:56 registered step HashComputeStep
+2026-03-20 19:41:37,712 DEBUG task_pipeliner.stats:register:53 step_name=HashLookupStep
+2026-03-20 19:41:37,712 DEBUG task_pipeliner.stats:register:56 registered step HashLookupStep
+2026-03-20 19:41:37,712 DEBUG task_pipeliner.stats:register:53 step_name=MinHashComputeStep
+2026-03-20 19:41:37,712 DEBUG task_pipeliner.stats:register:56 registered step MinHashComputeStep
+2026-03-20 19:41:37,712 DEBUG task_pipeliner.stats:register:53 step_name=MinHashLookupStep
+2026-03-20 19:41:37,712 DEBUG task_pipeliner.stats:register:56 registered step MinHashLookupStep
+2026-03-20 19:41:37,712 DEBUG task_pipeliner.stats:register:53 step_name=WriterStep
+2026-03-20 19:41:37,712 DEBUG task_pipeliner.stats:register:56 registered step WriterStep
+2026-03-20 19:41:37,714 DEBUG task_pipeliner.engine:_start_queue_merger:109 started 4 merger threads for fan-in
+2026-03-20 19:41:37,714 DEBUG task_pipeliner.producers:__init__:60 step=JsonlSourceStep output_queues=1 tags
+2026-03-20 19:41:37,715 DEBUG task_pipeliner.producers:__init__:116 step=QualityFilterStep output_queues=2 tags
+2026-03-20 19:41:37,715 DEBUG task_pipeliner.producers:__init__:116 step=HashComputeStep output_queues=1 tags
+2026-03-20 19:41:37,715 DEBUG task_pipeliner.producers:__init__:116 step=HashLookupStep output_queues=2 tags
+2026-03-20 19:41:37,715 DEBUG task_pipeliner.producers:__init__:116 step=MinHashComputeStep output_queues=1 tags
+2026-03-20 19:41:37,715 DEBUG task_pipeliner.producers:__init__:116 step=MinHashLookupStep output_queues=2 tags
+2026-03-20 19:41:37,715 DEBUG task_pipeliner.producers:__init__:116 step=WriterStep output_queues=0 tags
+2026-03-20 19:41:37,715 DEBUG task_pipeliner.engine:run:287 built 6 producers
+2026-03-20 19:41:37,720 INFO  task_pipeliner.producers:run:67 input producer started step=JsonlSourceStep
+2026-03-20 19:41:37,721 DEBUG task_pipeliner.io:__init__:22 paths=[WindowsPath('sample/taxonomy-converter/output/kept.jsonl')]
+2026-03-20 19:41:37,721 DEBUG task_pipeliner.producers:run:322 run started step=QualityFilterStep workers=4
+2026-03-20 19:41:37,721 INFO  task_pipeliner.producers:run:327 producer started step=QualityFilterStep
+2026-03-20 19:41:37,721 INFO  task_pipeliner.io:__init__:25 Reader opened (1 file(s))
+2026-03-20 19:41:37,722 DEBUG task_pipeliner.io:read:40 reading sample\taxonomy-converter\output\kept.jsonl
+2026-03-20 19:41:37,722 DEBUG task_pipeliner.producers:run:322 run started step=HashComputeStep workers=4
+2026-03-20 19:41:37,722 INFO  task_pipeliner.producers:run:327 producer started step=HashComputeStep
+2026-03-20 19:41:37,722 DEBUG task_pipeliner.producers:run:203 run started step=HashLookupStep
+2026-03-20 19:41:37,722 INFO  task_pipeliner.producers:run:208 producer started step=HashLookupStep
+2026-03-20 19:41:37,722 DEBUG task_pipeliner.producers:run:322 run started step=MinHashComputeStep workers=4
+2026-03-20 19:41:37,723 INFO  task_pipeliner.producers:run:327 producer started step=MinHashComputeStep
+2026-03-20 19:41:37,723 DEBUG task_pipeliner.producers:run:203 run started step=MinHashLookupStep
+2026-03-20 19:41:37,723 INFO  task_pipeliner.producers:run:208 producer started step=MinHashLookupStep
+2026-03-20 19:41:37,724 DEBUG task_pipeliner.producers:run:203 run started step=WriterStep
+2026-03-20 19:41:37,725 INFO  task_pipeliner.producers:run:208 producer started step=WriterStep
+2026-03-20 19:41:37,731 DEBUG task_pipeliner.producers:run:358 submitting chunk size=100
+2026-03-20 19:41:37,746 INFO  task_pipeliner.producers:run:89 input producer finished step=JsonlSourceStep
+2026-03-20 19:41:37,747 DEBUG task_pipeliner.producers:run:358 submitting chunk size=100
+2026-03-20 19:41:37,755 DEBUG task_pipeliner.producers:run:358 submitting chunk size=100
+2026-03-20 19:41:37,766 INFO  task_pipeliner.producers:run:342 sentinel received step=QualityFilterStep
+2026-03-20 19:41:37,766 DEBUG task_pipeliner.producers:run:345 submitting final chunk size=72
+2026-03-20 19:41:38,600 DEBUG task_pipeliner.producers:run:358 submitting chunk size=100
+2026-03-20 19:41:38,611 DEBUG task_pipeliner.producers:run:358 submitting chunk size=100
+2026-03-20 19:41:38,631 DEBUG task_pipeliner.producers:run:358 submitting chunk size=100
+2026-03-20 19:41:38,755 DEBUG task_pipeliner.producers:_publish_result:187 publishing result for step=QualityFilterStep
+2026-03-20 19:41:38,756 INFO  task_pipeliner.producers:run:342 sentinel received step=HashComputeStep
+2026-03-20 19:41:38,756 DEBUG task_pipeliner.producers:run:345 submitting final chunk size=36
+2026-03-20 19:41:38,756 INFO  task_pipeliner.producers:_send_sentinel:179 sent sentinel to 2 unique queue(s) step=QualityFilterStep
+2026-03-20 19:41:38,756 INFO  task_pipeliner.producers:run:391 producer finished step=QualityFilterStep
+2026-03-20 19:41:39,494 DEBUG task_pipeliner.producers:run:358 submitting chunk size=100
+2026-03-20 19:41:39,508 DEBUG task_pipeliner.producers:run:358 submitting chunk size=100
+2026-03-20 19:41:39,518 DEBUG task_pipeliner.producers:run:358 submitting chunk size=100
+2026-03-20 19:41:39,679 DEBUG task_pipeliner.producers:_publish_result:187 publishing result for step=HashComputeStep
+2026-03-20 19:41:39,680 INFO  task_pipeliner.producers:_send_sentinel:179 sent sentinel to 1 unique queue(s) step=HashComputeStep
+2026-03-20 19:41:39,680 INFO  task_pipeliner.producers:run:391 producer finished step=HashComputeStep
+2026-03-20 19:41:39,680 INFO  task_pipeliner.producers:run:212 sentinel received step=HashLookupStep
+2026-03-20 19:41:39,680 DEBUG task_pipeliner.producers:_publish_result:187 publishing result for step=HashLookupStep
+2026-03-20 19:41:39,681 INFO  task_pipeliner.producers:run:342 sentinel received step=MinHashComputeStep
+2026-03-20 19:41:39,681 DEBUG task_pipeliner.producers:run:345 submitting final chunk size=36
+2026-03-20 19:41:39,681 INFO  task_pipeliner.producers:_send_sentinel:179 sent sentinel to 2 unique queue(s) step=HashLookupStep
+2026-03-20 19:41:39,681 INFO  task_pipeliner.producers:run:234 producer finished step=HashLookupStep
+2026-03-20 19:41:40,633 DEBUG task_pipeliner.producers:_publish_result:187 publishing result for step=MinHashComputeStep
+2026-03-20 19:41:40,633 INFO  task_pipeliner.producers:_send_sentinel:179 sent sentinel to 1 unique queue(s) step=MinHashComputeStep
+2026-03-20 19:41:40,634 INFO  task_pipeliner.producers:run:391 producer finished step=MinHashComputeStep
+2026-03-20 19:41:40,634 INFO  task_pipeliner.producers:run:212 sentinel received step=MinHashLookupStep
+2026-03-20 19:41:40,634 DEBUG task_pipeliner.producers:_publish_result:187 publishing result for step=MinHashLookupStep
+2026-03-20 19:41:40,634 INFO  task_pipeliner.producers:_send_sentinel:179 sent sentinel to 2 unique queue(s) step=MinHashLookupStep
+2026-03-20 19:41:40,634 INFO  task_pipeliner.producers:run:234 producer finished step=MinHashLookupStep
+2026-03-20 19:41:40,634 INFO  task_pipeliner.producers:run:212 sentinel received step=WriterStep
+2026-03-20 19:41:40,635 DEBUG task_pipeliner.producers:_publish_result:187 publishing result for step=WriterStep
+2026-03-20 19:41:40,636 INFO  task_pipeliner.producers:_send_sentinel:179 sent sentinel to 0 unique queue(s) step=WriterStep
+2026-03-20 19:41:40,636 INFO  task_pipeliner.producers:run:234 producer finished step=WriterStep
+2026-03-20 19:41:40,637 DEBUG task_pipeliner.engine:run:348 result written for step QualityFilterStep
+2026-03-20 19:41:40,638 DEBUG task_pipeliner.engine:run:348 result written for step HashComputeStep
+2026-03-20 19:41:40,638 DEBUG task_pipeliner.engine:run:348 result written for step HashLookupStep
+2026-03-20 19:41:40,639 DEBUG task_pipeliner.engine:run:348 result written for step MinHashComputeStep
+2026-03-20 19:41:40,639 DEBUG task_pipeliner.engine:run:348 result written for step MinHashLookupStep
+2026-03-20 19:41:40,640 DEBUG task_pipeliner.engine:run:348 result written for step WriterStep
+2026-03-20 19:41:40,640 DEBUG task_pipeliner.stats:write_json:84 path=sample\pretrain-data-filter\output\stats.json
+2026-03-20 19:41:40,641 INFO  task_pipeliner.stats:write_json:91 stats JSON written to sample\pretrain-data-filter\output\stats.json
+2026-03-20 19:41:40,641 INFO  task_pipeliner.engine:run:353 pipeline completed
+2026-03-20 19:41:40,641 INFO  task_pipeliner.pipeline:run:78 pipeline run completed config=pipeline=[StepConfig(type='quality_filter', enabled=True, outputs={'kept': 'hash_compute', 'removed': 'writer'}, text_key='text', filters={'length': {'min_chars': 200, 'min_words': 50}, 'repetition': {'max_dup_line_frac': 0.3}, 'pii': {}}), StepConfig(type='hash_compute', enabled=True, outputs={'main': 'hash_lookup'}, text_key='text', hash_algo='sha256'), StepConfig(type='hash_lookup', enabled=True, outputs={'kept': 'minhash_compute', 'removed': 'writer'}), StepConfig(type='minhash_compute', enabled=True, outputs={'main': 'minhash_lookup'}, text_key='text', num_perm=128, ngram_size=5), StepConfig(type='minhash_lookup', enabled=True, outputs={'kept': 'writer', 'removed': 'writer'}, threshold=0.8, num_perm=128), StepConfig(type='writer', enabled=True, outputs=None, output_dir='sample\\pretrain-data-filter\\output')] execution=ExecutionConfig(workers=4, queue_size=200, chunk_size=100)

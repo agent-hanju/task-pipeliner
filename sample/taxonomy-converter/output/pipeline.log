@@ -1,0 +1,62 @@
+2026-03-20 18:54:37,474 DEBUG task_pipeliner.stats:setup_log_handler:81 log handler attached to task_pipeliner logger
+2026-03-20 18:54:37,474 DEBUG task_pipeliner.engine:__init__:128 config steps=5 registry=5
+2026-03-20 18:54:37,474 INFO  task_pipeliner.engine:run:143 pipeline started steps=5 workers=4
+2026-03-20 18:54:37,474 DEBUG task_pipeliner.stats:register:53 step_name=LoaderStep
+2026-03-20 18:54:37,474 DEBUG task_pipeliner.stats:register:56 registered step LoaderStep
+2026-03-20 18:54:37,474 DEBUG task_pipeliner.stats:register:53 step_name=PreprocessStep
+2026-03-20 18:54:37,474 DEBUG task_pipeliner.stats:register:56 registered step PreprocessStep
+2026-03-20 18:54:37,474 DEBUG task_pipeliner.stats:register:53 step_name=ConvertStep
+2026-03-20 18:54:37,489 DEBUG task_pipeliner.stats:register:56 registered step ConvertStep
+2026-03-20 18:54:37,489 DEBUG task_pipeliner.stats:register:53 step_name=DeduplicateStep
+2026-03-20 18:54:37,489 DEBUG task_pipeliner.stats:register:56 registered step DeduplicateStep
+2026-03-20 18:54:37,489 DEBUG task_pipeliner.stats:register:53 step_name=WriterStep
+2026-03-20 18:54:37,489 DEBUG task_pipeliner.stats:register:56 registered step WriterStep
+2026-03-20 18:54:37,491 DEBUG task_pipeliner.engine:_start_queue_merger:109 started 2 merger threads for fan-in
+2026-03-20 18:54:37,491 DEBUG task_pipeliner.producers:__init__:60 step=LoaderStep output_queues=1 tags
+2026-03-20 18:54:37,491 DEBUG task_pipeliner.producers:__init__:116 step=PreprocessStep output_queues=2 tags
+2026-03-20 18:54:37,491 DEBUG task_pipeliner.producers:__init__:116 step=ConvertStep output_queues=1 tags
+2026-03-20 18:54:37,492 DEBUG task_pipeliner.producers:__init__:116 step=DeduplicateStep output_queues=1 tags
+2026-03-20 18:54:37,492 DEBUG task_pipeliner.producers:__init__:116 step=WriterStep output_queues=0 tags
+2026-03-20 18:54:37,492 DEBUG task_pipeliner.engine:run:287 built 4 producers
+2026-03-20 18:54:37,492 INFO  task_pipeliner.producers:run:67 input producer started step=LoaderStep
+2026-03-20 18:54:37,492 DEBUG task_pipeliner.producers:run:322 run started step=PreprocessStep workers=4
+2026-03-20 18:54:37,492 INFO  task_pipeliner.producers:run:327 producer started step=PreprocessStep
+2026-03-20 18:54:37,493 DEBUG task_pipeliner.producers:run:322 run started step=ConvertStep workers=4
+2026-03-20 18:54:37,493 INFO  task_pipeliner.producers:run:327 producer started step=ConvertStep
+2026-03-20 18:54:37,493 DEBUG task_pipeliner.producers:run:203 run started step=DeduplicateStep
+2026-03-20 18:54:37,493 INFO  task_pipeliner.producers:run:208 producer started step=DeduplicateStep
+2026-03-20 18:54:37,493 DEBUG task_pipeliner.producers:run:203 run started step=WriterStep
+2026-03-20 18:54:37,494 INFO  task_pipeliner.producers:run:208 producer started step=WriterStep
+2026-03-20 18:54:37,509 DEBUG task_pipeliner.producers:run:358 submitting chunk size=100
+2026-03-20 18:54:37,530 DEBUG task_pipeliner.producers:run:358 submitting chunk size=100
+2026-03-20 18:54:37,548 INFO  task_pipeliner.producers:run:89 input producer finished step=LoaderStep
+2026-03-20 18:54:37,550 DEBUG task_pipeliner.producers:run:358 submitting chunk size=100
+2026-03-20 18:54:37,560 DEBUG task_pipeliner.producers:run:358 submitting chunk size=100
+2026-03-20 18:54:37,565 INFO  task_pipeliner.producers:run:342 sentinel received step=PreprocessStep
+2026-03-20 18:54:37,565 DEBUG task_pipeliner.producers:run:345 submitting final chunk size=38
+2026-03-20 18:54:37,794 DEBUG task_pipeliner.producers:run:358 submitting chunk size=100
+2026-03-20 18:54:37,804 DEBUG task_pipeliner.producers:run:358 submitting chunk size=100
+2026-03-20 18:54:37,816 DEBUG task_pipeliner.producers:run:358 submitting chunk size=100
+2026-03-20 18:54:37,855 DEBUG task_pipeliner.producers:_publish_result:187 publishing result for step=PreprocessStep
+2026-03-20 18:54:37,855 INFO  task_pipeliner.producers:_send_sentinel:179 sent sentinel to 2 unique queue(s) step=PreprocessStep
+2026-03-20 18:54:37,855 INFO  task_pipeliner.producers:run:391 producer finished step=PreprocessStep
+2026-03-20 18:54:37,856 INFO  task_pipeliner.producers:run:342 sentinel received step=ConvertStep
+2026-03-20 18:54:37,856 DEBUG task_pipeliner.producers:run:345 submitting final chunk size=72
+2026-03-20 18:54:38,133 DEBUG task_pipeliner.producers:_publish_result:187 publishing result for step=ConvertStep
+2026-03-20 18:54:38,134 INFO  task_pipeliner.producers:_send_sentinel:179 sent sentinel to 1 unique queue(s) step=ConvertStep
+2026-03-20 18:54:38,134 INFO  task_pipeliner.producers:run:391 producer finished step=ConvertStep
+2026-03-20 18:54:38,134 INFO  task_pipeliner.producers:run:212 sentinel received step=DeduplicateStep
+2026-03-20 18:54:38,135 DEBUG task_pipeliner.producers:_publish_result:187 publishing result for step=DeduplicateStep
+2026-03-20 18:54:38,135 INFO  task_pipeliner.producers:_send_sentinel:179 sent sentinel to 1 unique queue(s) step=DeduplicateStep
+2026-03-20 18:54:38,135 INFO  task_pipeliner.producers:run:234 producer finished step=DeduplicateStep
+2026-03-20 18:54:38,135 INFO  task_pipeliner.producers:run:212 sentinel received step=WriterStep
+2026-03-20 18:54:38,136 DEBUG task_pipeliner.producers:_publish_result:187 publishing result for step=WriterStep
+2026-03-20 18:54:38,136 INFO  task_pipeliner.producers:_send_sentinel:179 sent sentinel to 0 unique queue(s) step=WriterStep
+2026-03-20 18:54:38,136 INFO  task_pipeliner.producers:run:234 producer finished step=WriterStep
+2026-03-20 18:54:38,137 DEBUG task_pipeliner.engine:run:348 result written for step PreprocessStep
+2026-03-20 18:54:38,138 DEBUG task_pipeliner.engine:run:348 result written for step ConvertStep
+2026-03-20 18:54:38,138 DEBUG task_pipeliner.engine:run:348 result written for step DeduplicateStep
+2026-03-20 18:54:38,139 DEBUG task_pipeliner.engine:run:348 result written for step WriterStep
+2026-03-20 18:54:38,139 DEBUG task_pipeliner.stats:write_json:84 path=sample\taxonomy-converter\output\stats.json
+2026-03-20 18:54:38,140 INFO  task_pipeliner.stats:write_json:91 stats JSON written to sample\taxonomy-converter\output\stats.json
+2026-03-20 18:54:38,140 INFO  task_pipeliner.engine:run:353 pipeline completed
