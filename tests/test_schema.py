@@ -172,22 +172,46 @@ class TestBaseStep:
 
             Bad()  # type: ignore[abstract]
 
-    def test_process_with_emit_callback(self) -> None:
-        """process() receives emit callback; emit sends items, return is result."""
-        collected: list[Any] = []
+    def test_outputs_defaults_to_empty_tuple(self) -> None:
+        """BaseStep.outputs defaults to () — terminal step."""
 
-        class EmitStep(BaseStep[_DummyResult]):
+        class TerminalStep(BaseStep[_NoOpResult]):
             step_type = StepType.PARALLEL
 
+            def process(self, item: Any, state: Any, emit: Any) -> _NoOpResult:
+                return _NoOpResult()
+
+        assert TerminalStep.outputs == ()
+        assert TerminalStep().outputs == ()
+
+    def test_outputs_can_be_declared(self) -> None:
+        """Subclass can declare named outputs."""
+
+        class BranchStep(BaseStep[_NoOpResult]):
+            step_type = StepType.PARALLEL
+            outputs = ("kept", "removed")
+
+            def process(self, item: Any, state: Any, emit: Any) -> _NoOpResult:
+                emit(item, "kept")
+                return _NoOpResult()
+
+        assert BranchStep.outputs == ("kept", "removed")
+
+    def test_process_emit_with_tag(self) -> None:
+        """emit(item, tag) — tag is required second argument."""
+        collected: list[tuple[Any, str]] = []
+
+        class TaggedStep(BaseStep[_DummyResult]):
+            step_type = StepType.PARALLEL
+            outputs = ("out",)
+
             def process(self, item: Any, state: Any, emit: Any) -> _DummyResult:
-                emit(item)
-                emit(item)
+                emit(item, "out")
                 return _DummyResult(count=1)
 
-        step = EmitStep()
-        result = step.process("hello", None, collected.append)
-        assert collected == ["hello", "hello"]
-        assert isinstance(result, _DummyResult)
+        step = TaggedStep()
+        result = step.process("hello", None, lambda i, t: collected.append((i, t)))
+        assert collected == [("hello", "out")]
         assert result.count == 1
 
     def test_items_raises_not_implemented_by_default(self) -> None:
@@ -247,6 +271,49 @@ class TestStepConfig:
         assert cfg.model_extra["threshold"] == 0.5
         assert cfg.model_extra["mode"] == "strict"
 
+    # ── W-T04: outputs field ──────────────────────────────────────
+
+    def test_outputs_defaults_to_none(self) -> None:
+        """outputs field defaults to None (terminal step or unspecified)."""
+        cfg = StepConfig(type="writer")
+        assert cfg.outputs is None
+
+    def test_outputs_single_downstream(self) -> None:
+        """String value = single downstream step."""
+        cfg = StepConfig(type="loader", outputs={"main": "preprocess"})
+        assert cfg.outputs == {"main": "preprocess"}
+
+    def test_outputs_fan_out(self) -> None:
+        """list[str] value = fan-out to multiple downstream steps."""
+        cfg = StepConfig(
+            type="preprocess", outputs={"kept": ["convert", "audit"], "removed": "writer"}
+        )
+        assert cfg.outputs is not None
+        assert cfg.outputs["kept"] == ["convert", "audit"]
+        assert cfg.outputs["removed"] == "writer"
+
+    def test_outputs_not_in_model_extra(self) -> None:
+        """outputs is an explicit field, not captured by extra='allow'."""
+        cfg = StepConfig(type="loader", outputs={"main": "next"}, threshold=0.5)
+        assert cfg.outputs == {"main": "next"}
+        assert "outputs" not in cfg.model_extra
+        assert cfg.model_extra["threshold"] == 0.5
+
+    def test_outputs_empty_dict_allowed(self) -> None:
+        """Empty dict is valid (step declares outputs but none connected)."""
+        cfg = StepConfig(type="loader", outputs={})
+        assert cfg.outputs == {}
+
+    def test_outputs_invalid_type_rejected(self) -> None:
+        """outputs must be dict or None, not a string or list."""
+        with pytest.raises(ConfigValidationError):
+            StepConfig(type="loader", outputs="main")
+
+    def test_outputs_invalid_value_type_rejected(self) -> None:
+        """Dict values must be str or list[str], not int."""
+        with pytest.raises(ConfigValidationError):
+            StepConfig(type="loader", outputs={"main": 123})
+
 
 class TestExecutionConfig:
     def test_defaults(self) -> None:
@@ -279,6 +346,50 @@ class TestPipelineConfig:
         with pytest.raises(ConfigValidationError):
             PipelineConfig(pipeline=[StepConfig(type="a")], unknown=1)
 
+    # ── W-T04: outputs validation ─────────────────────────────────
+
+    def test_valid_outputs_topology(self) -> None:
+        """All referenced step types exist in the pipeline."""
+        cfg = PipelineConfig(
+            pipeline=[
+                StepConfig(type="loader", outputs={"main": "filter"}),
+                StepConfig(type="filter", outputs={"kept": "writer"}),
+                StepConfig(type="writer"),
+            ]
+        )
+        assert cfg.pipeline[0].outputs == {"main": "filter"}
+        assert cfg.pipeline[2].outputs is None
+
+    def test_outputs_reference_nonexistent_step_rejected(self) -> None:
+        """Referencing a step type not in the pipeline raises error."""
+        with pytest.raises(ConfigValidationError):
+            PipelineConfig(
+                pipeline=[
+                    StepConfig(type="loader", outputs={"main": "nonexistent"}),
+                ]
+            )
+
+    def test_outputs_fanout_reference_nonexistent_step_rejected(self) -> None:
+        """Fan-out list referencing a nonexistent step raises error."""
+        with pytest.raises(ConfigValidationError):
+            PipelineConfig(
+                pipeline=[
+                    StepConfig(type="loader", outputs={"main": ["filter", "ghost"]}),
+                    StepConfig(type="filter"),
+                ]
+            )
+
+    def test_outputs_fanout_all_valid(self) -> None:
+        """Fan-out with all valid references passes validation."""
+        cfg = PipelineConfig(
+            pipeline=[
+                StepConfig(type="loader", outputs={"main": ["filter", "writer"]}),
+                StepConfig(type="filter"),
+                StepConfig(type="writer"),
+            ]
+        )
+        assert cfg.pipeline[0].outputs == {"main": ["filter", "writer"]}
+
 
 class TestLoadConfig:
     def test_valid_yaml(self, tmp_path: Path) -> None:
@@ -308,3 +419,27 @@ class TestLoadConfig:
         yaml_file.write_text("pipeline:\n  - type: pass\n")
         cfg = load_config(yaml_file)
         assert cfg.execution.workers == 4
+
+    def test_yaml_with_outputs(self, tmp_path: Path) -> None:
+        yaml_file = tmp_path / "topo.yaml"
+        yaml_file.write_text(
+            "pipeline:\n"
+            "  - type: loader\n"
+            "    outputs:\n"
+            "      main: preprocess\n"
+            "  - type: preprocess\n"
+            "    outputs:\n"
+            "      kept: writer\n"
+            "      removed: writer\n"
+            "  - type: writer\n"
+        )
+        cfg = load_config(yaml_file)
+        assert cfg.pipeline[0].outputs == {"main": "preprocess"}
+        assert cfg.pipeline[1].outputs == {"kept": "writer", "removed": "writer"}
+        assert cfg.pipeline[2].outputs is None
+
+    def test_yaml_outputs_reference_invalid_step_raises(self, tmp_path: Path) -> None:
+        yaml_file = tmp_path / "bad_topo.yaml"
+        yaml_file.write_text("pipeline:\n  - type: loader\n    outputs:\n      main: ghost\n")
+        with pytest.raises(ConfigValidationError):
+            load_config(yaml_file)

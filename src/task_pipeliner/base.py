@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
 from enum import Enum
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 
 
 class StepType(Enum):
@@ -37,6 +37,9 @@ class BaseResult(ABC):
 class BaseStep[R: BaseResult](ABC):
     """Abstract base for individual-item processing steps."""
 
+    outputs: ClassVar[tuple[str, ...]] = ()
+    """Declared output tags. Empty tuple ``()`` means terminal step (emit not allowed)."""
+
     @property
     def name(self) -> str:
         return type(self).__name__
@@ -46,11 +49,19 @@ class BaseStep[R: BaseResult](ABC):
     def step_type(self) -> StepType: ...
 
     @abstractmethod
-    def process(self, item: Any, state: Any, emit: Callable[[Any], None]) -> R:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> R:
         """Process a single item.
 
-        *emit* — callback provided by the Producer to forward items to
-        the next queue.  Call it zero or more times at any point.
+        *emit(item, tag)* — callback provided by the Producer to forward
+        items to the named output.  Call it zero or more times.
+
+        Example::
+
+            emit(item, "kept")     # forward to "kept" output
+            emit(item, "removed")  # forward to "removed" output
+
+        ``outputs = ()`` steps (terminal) must NOT call emit —
+        doing so raises ``RuntimeError``.
 
         Returns a result data object ``R`` that the Producer will
         atomically merge with previous results.

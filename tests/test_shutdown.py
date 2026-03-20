@@ -36,7 +36,7 @@ class TestNormalCompletion:
         assert "DummySourceStep" in step_names
         assert "PassthroughStep" in step_names
         pt = next(d for d in data if d["step_name"] == "PassthroughStep")
-        assert pt["passed"] == 10
+        assert pt["processed"] == 10
 
     @pytest.mark.timeout(20)
     def test_result_write_called(self, tmp_path: Path) -> None:
@@ -184,4 +184,4 @@ class TestSignalShutdown:
         data = orjson.loads(stats_file.read_bytes())
         slow = next((d for d in data if d["step_name"] == "SlowStep"), None)
         assert slow is not None
-        assert slow["passed"] >= 0
+        assert slow["processed"] >= 0

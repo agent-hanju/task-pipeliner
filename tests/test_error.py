@@ -36,7 +36,7 @@ class TestErrorHandlingSequential:
         producer = SequentialProducer(
             step=step,
             input_queue=in_q,
-            output_queues=[out_q],
+            output_queues={"main": [out_q]},
             stats=stats,
             result_queue=result_q,
         )
@@ -89,7 +89,7 @@ class TestErrorHandlingSequential:
         items = list(range(10)) + [-1, -1]
         collected, result, stats = self._run(items)
         assert stats._stats["ErrorOnItemStep"].errored == 2
-        assert stats._stats["ErrorOnItemStep"].passed == 10
+        assert stats._stats["ErrorOnItemStep"].processed == 10
 
     @pytest.mark.timeout(15)
     def test_sentinel_always_sent_even_after_errors(self) -> None:
@@ -110,7 +110,7 @@ class TestErrorHandlingSequential:
         producer = SequentialProducer(
             step=step,
             input_queue=in_q,
-            output_queues=[out_q],
+            output_queues={"main": [out_q]},
             stats=stats,
             result_queue=result_q,
         )
@@ -149,7 +149,7 @@ class TestErrorHandlingParallel:
         producer = ParallelProducer(
             step=step,
             input_queue=in_q,
-            output_queues=[out_q],
+            output_queues={"main": [out_q]},
             stats=stats,
             result_queue=result_q,
             workers=2,
@@ -166,7 +166,7 @@ class TestErrorHandlingParallel:
 
         assert sorted(collected) == [1, 2, 3, 4]
         assert stats._stats[step.name].errored == 2
-        assert stats._stats[step.name].passed == 4
+        assert stats._stats[step.name].processed == 4
 
     @pytest.mark.timeout(30)
     def test_graceful_result_publish_on_error(self) -> None:
@@ -187,7 +187,7 @@ class TestErrorHandlingParallel:
         producer = ParallelProducer(
             step=step,
             input_queue=in_q,
-            output_queues=[out_q],
+            output_queues={"main": [out_q]},
             stats=stats,
             result_queue=result_q,
             workers=2,

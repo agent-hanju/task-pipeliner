@@ -131,17 +131,17 @@ PreprocessStep ──kept──→ ConvertStep
 
 ## Phase 1 — 코어 인터페이스
 
-### - [ ] W-T01 `base.py` — outputs 선언 + emit 시그니처 변경
+### - [x] W-T01 `base.py` — outputs 선언 + emit 시그니처 변경
 
 **파일**: `src/task_pipeliner/base.py`
 **의존**: 없음
 
-- [ ] `BaseStep.outputs` 클래스 변수 추가 (기본값: `()` — 빈 튜플, emit 불가)
-- [ ] `emit` 콜백 타입을 `Callable[[Any, str], None]`으로 변경 (tag 필수, 기본값 없음)
-- [ ] `process()` 시그니처에서 `emit`은 유지하되, `outputs = ()`인 스텝에서 호출 시 에러
-- [ ] `process()` 독스트링에 `emit(item, "tag")` 사용법 명시
-- [ ] 기존 테스트 통과 확인
-- [ ] ruff / mypy 통과
+- [x] `BaseStep.outputs` 클래스 변수 추가 (기본값: `()` — 빈 튜플, emit 불가)
+- [x] `emit` 콜백 타입을 `Callable[[Any, str], None]`으로 변경 (tag 필수, 기본값 없음)
+- [x] `process()` 시그니처에서 `emit`은 유지하되, `outputs = ()`인 스텝에서 호출 시 에러
+- [x] `process()` 독스트링에 `emit(item, "tag")` 사용법 명시
+- [x] 기존 테스트 통과 확인
+- [x] ruff / mypy 통과
 
 ```python
 class BaseStep(ABC, Generic[R]):
@@ -173,21 +173,21 @@ class BaseStep(ABC, Generic[R]):
 
 ## Phase 2 — 큐 라우팅
 
-### - [ ] W-T02 `producers.py` — 태그별 큐 라우팅
+### - [x] W-T02 `producers.py` — 태그별 큐 라우팅
 
 **파일**: `src/task_pipeliner/producers.py`
 **의존**: W-T01
 
-- [ ] `output_queues` 타입을 `list[Queue]` → `dict[str, list[Queue]]`로 변경 (tag → queues)
-- [ ] `_make_emit()` 수정:
+- [x] `output_queues` 타입을 `list[Queue]` → `dict[str, list[Queue]]`로 변경 (tag → queues)
+- [x] `_make_emit()` 수정:
   - `outputs = ()`인 스텝: emit 호출 시 `RuntimeError` raise
   - 미연결 tag (config에 없음): 무시 (로그 DEBUG)
   - 연결된 tag: 해당 큐들에 put
-- [ ] `InputProducer`의 `output_queues`도 `dict[str, list[Queue]]`로 변경
-- [ ] `_send_sentinel()` — 모든 tag의 모든 큐에 sentinel 전송
-- [ ] `_parallel_worker`의 emit 버퍼도 태그 지원 (`list[tuple[Any, str]]`)
-- [ ] 기존 테스트 통과 확인
-- [ ] ruff / mypy 통과
+- [x] `InputProducer`의 `output_queues`도 `dict[str, list[Queue]]`로 변경
+- [x] `_send_sentinel()` — 모든 tag의 모든 큐에 sentinel 전송
+- [x] `_parallel_worker`의 emit 버퍼도 태그 지원 (`list[tuple[Any, str]]`)
+- [x] 기존 테스트 통과 확인
+- [x] ruff / mypy 통과
 
 ```python
 class BaseProducer(ABC, multiprocessing.Process):
@@ -237,21 +237,21 @@ class BaseProducer(ABC, multiprocessing.Process):
 
 ---
 
-### - [ ] W-T03 `engine.py` — DAG 큐 빌더
+### - [x] W-T03 `engine.py` — DAG 큐 빌더
 
 **파일**: `src/task_pipeliner/engine.py`
 **의존**: W-T02
 
-- [ ] 선형 큐 체인 제거 → config의 `outputs` 매핑 기반 큐 생성
-- [ ] 큐 생성 로직: config의 outputs 매핑을 순회하며 `(source_step, tag) → target_step` 연결마다 큐 생성
-- [ ] `outputs` 미선언 스텝 (`outputs = ()`) → 출력 큐 없음 (terminal)
-- [ ] `outputs`를 선언했지만 config에 매핑이 없는 tag → 큐 미생성 (emit 시 silent drop)
-- [ ] 복수 입력 큐: 하나의 스텝이 여러 upstream에서 아이템을 받을 수 있음
-- [ ] 복수 입력 큐 소비 전략: 모든 입력 큐에서 sentinel이 도착해야 스텝 종료
-- [ ] SOURCE 스텝 검증 로직 유지
-- [ ] sentinel 주입 (graceful shutdown) — 모든 큐에 sentinel
-- [ ] 기존 테스트 통과 확인
-- [ ] ruff / mypy 통과
+- [x] 선형 큐 체인 제거 → config의 `outputs` 매핑 기반 큐 생성
+- [x] 큐 생성 로직: config의 outputs 매핑을 순회하며 `(source_step, tag) → target_step` 연결마다 큐 생성
+- [x] `outputs` 미선언 스텝 (`outputs = ()`) → 출력 큐 없음 (terminal)
+- [x] `outputs`를 선언했지만 config에 매핑이 없는 tag → 큐 미생성 (emit 시 silent drop)
+- [x] 복수 입력 큐: 하나의 스텝이 여러 upstream에서 아이템을 받을 수 있음
+- [x] 복수 입력 큐 소비 전략: 모든 입력 큐에서 sentinel이 도착해야 스텝 종료
+- [x] SOURCE 스텝 검증 로직 유지
+- [x] sentinel 주입 (graceful shutdown) — 모든 큐에 sentinel
+- [x] 기존 테스트 통과 확인
+- [x] ruff / mypy 통과
 
 큐 구조 (예시):
 
@@ -292,19 +292,19 @@ WriterStep
 
 ## Phase 3 — 설정 스키마
 
-### - [ ] W-T04 `config.py` — outputs 매핑 스키마
+### - [x] W-T04 `config.py` — outputs 매핑 스키마
 
 **파일**: `src/task_pipeliner/config.py`
 **의존**: W-T01
 
-- [ ] `StepConfig`에 `outputs` 필드 추가: `dict[str, str | list[str]] | None`
-- [ ] `outputs`가 `None`이고 스텝의 `outputs`가 비어있으면 정상 (terminal step)
-- [ ] `outputs`가 `None`이고 스텝의 `outputs`가 비어있지 않으면 경고 (연결 없는 출력)
-- [ ] `str` 값이면 단일 downstream, `list[str]` 값이면 fan-out
-- [ ] config validation: outputs에 참조된 스텝 type이 pipeline에 존재하는지 검증
-- [ ] `outputs` 필드는 `model_extra`가 아닌 명시적 필드로 선언 (extra에 빠지지 않도록)
-- [ ] 기존 테스트 통과 확인
-- [ ] ruff / mypy 통과
+- [x] `StepConfig`에 `outputs` 필드 추가: `dict[str, str | list[str]] | None`
+- [x] `outputs`가 `None`이고 스텝의 `outputs`가 비어있으면 정상 (terminal step)
+- [x] `outputs`가 `None`이고 스텝의 `outputs`가 비어있지 않으면 경고 (연결 없는 출력)
+- [x] `str` 값이면 단일 downstream, `list[str]` 값이면 fan-out
+- [x] config validation: outputs에 참조된 스텝 type이 pipeline에 존재하는지 검증
+- [x] `outputs` 필드는 `model_extra`가 아닌 명시적 필드로 선언 (extra에 빠지지 않도록)
+- [x] 기존 테스트 통과 확인
+- [x] ruff / mypy 통과
 
 ```python
 class StepConfig(_WrappingModel):
@@ -344,40 +344,40 @@ pipeline:
 
 ## Phase 4 — 파사드·CLI
 
-### - [ ] W-T05 `pipeline.py` + `cli.py` — 변경 전파
+### - [x] W-T05 `pipeline.py` + `cli.py` — 변경 전파
 
 **파일**: `src/task_pipeliner/pipeline.py`, `src/task_pipeliner/cli.py`
 **의존**: W-T03, W-T04
 
-- [ ] `Pipeline.run()`에서 `JsonlSourceStep` 주입 시 `outputs` 설정 반영
-- [ ] CLI 커맨드에 영향 없음 확인 (config가 모든 라우팅을 담당)
-- [ ] 기존 테스트 통과 확인
-- [ ] ruff / mypy 통과
+- [x] `Pipeline.run()`에서 `JsonlSourceStep` 주입 시 `outputs` 설정 반영
+- [x] CLI 커맨드에 영향 없음 확인 (config가 모든 라우팅을 담당)
+- [x] 기존 테스트 통과 확인
+- [x] ruff / mypy 통과
 
 ---
 
 ## Phase 5 — 테스트 수정
 
-### - [ ] W-T06 프레임워크 테스트 전체 수정
+### - [x] W-T06 프레임워크 테스트 전체 수정
 
 **파일**: `tests/` 전체
 **의존**: W-T01 ~ W-T05
 
 #### 신규 테스트
 
-- [ ] `test_schema.py` — `BaseStep.outputs` 기본값 `()` 검증
-- [ ] `test_queue.py` — 태그별 emit 라우팅 테스트
+- [x] `test_schema.py` — `BaseStep.outputs` 기본값 `()` 검증
+- [x] `test_queue.py` — 태그별 emit 라우팅 테스트
   - `emit(item, "kept")` → kept 큐에 전달
   - `emit(item, "removed")` → removed 큐에 전달
   - `emit(item, "unknown")` → config에 없으면 무시 (큐에 아무것도 안 감)
   - `outputs = ()`인 스텝에서 `emit()` 호출 → `RuntimeError`
   - fan-out: 하나의 tag에 복수 큐 연결 → 양쪽 모두 수신
-- [ ] `test_engine.py` — DAG 큐 빌드 테스트
+- [x] `test_engine.py` — DAG 큐 빌드 테스트
   - outputs 매핑이 있는 config → 올바른 큐 연결 검증
   - terminal 스텝 (outputs 없음) → 출력 큐 없이 정상 동작
   - 미연결 출력 tag → 아이템 소실 확인 (에러 아님)
   - 복수 입력 큐 → 모든 sentinel 도착 후 종료 확인
-- [ ] `test_config.py` — outputs 스키마 검증
+- [x] `test_config.py` — outputs 스키마 검증
   - `outputs: null` + terminal step → 정상
   - `outputs: {kept: convert}` → 정상 파싱
   - `outputs: {kept: [convert, logger]}` → fan-out 파싱
@@ -385,37 +385,37 @@ pipeline:
 
 #### 기존 테스트 수정
 
-- [ ] `tests/dummy_steps.py` 수정:
+- [x] `tests/dummy_steps.py` 수정:
   - 기존 DummyStep들에 `outputs` 선언 추가 (emit을 호출하는 스텝)
   - `outputs = ()`인 terminal DummyStep 추가
   - `emit(item)` → `emit(item, "tag")` 호출로 변경
-- [ ] 기존 테스트에서 `emit(item)` → `emit(item, "tag")` 호출 변경 반영
-- [ ] config에 `outputs` 매핑 추가
-- [ ] 전체 pytest 통과
-- [ ] ruff / mypy 통과
+- [x] 기존 테스트에서 `emit(item)` → `emit(item, "tag")` 호출 변경 반영
+- [x] config에 `outputs` 매핑 추가
+- [x] 전체 pytest 통과
+- [x] ruff / mypy 통과
 
 ---
 
 ## Phase 6 — 샘플 프로젝트 적용
 
-### - [ ] W-T07 taxonomy-converter 적용
+### - [x] W-T07 taxonomy-converter 적용
 
 **파일**: `sample/taxonomy-converter/` 전체
 **의존**: W-T06
 
-- [ ] `steps.py` — 각 스텝에 `outputs` 선언:
+- [x] `steps.py` — 각 스텝에 `outputs` 선언:
   - `LoaderStep.outputs = ("main",)` (SOURCE)
   - `PreprocessStep.outputs = ("kept", "removed")`
   - `ConvertStep.outputs = ("kept",)`
   - `DeduplicateStep.outputs = ("kept",)`
   - `WriterStep` — outputs 없음 (terminal)
-- [ ] `steps.py` — emit 호출 변경:
+- [x] `steps.py` — emit 호출 변경:
   - `PreprocessStep`: `emit(item)` → `emit(item, "kept")`, skip 시 `emit(item, "removed")`
   - `ConvertStep`: `emit(taxonomy_dict)` → `emit(taxonomy_dict, "kept")`
   - `DeduplicateStep`: `emit(item)` → `emit(item, "kept")`
   - `WriterStep`: emit 호출 제거 (이미 없음)
-- [ ] `steps.py` — `WriterStep`이 복수 입력(kept + removed)을 받아 파일 분리
-- [ ] `pipeline_config.yaml` — outputs 매핑 추가
+- [x] `steps.py` — `WriterStep`이 복수 입력(kept + removed)을 받아 파일 분리
+- [x] `pipeline_config.yaml` — outputs 매핑 추가
 
 ```yaml
 pipeline:
@@ -451,9 +451,9 @@ execution:
   chunk_size: 100
 ```
 
-- [ ] `run.py` — 변경 없음 확인 (config가 라우팅을 담당)
-- [ ] 샘플 테스트에서 `kept.jsonl` + `removed.jsonl` 모두 생성 검증
-- [ ] ruff 통과
+- [x] `run.py` — CLI override에서 outputs 보존 확인
+- [x] 샘플 테스트에서 `kept.jsonl` + `removed.jsonl` 모두 생성 검증
+- [x] ruff 통과
 
 ---
 

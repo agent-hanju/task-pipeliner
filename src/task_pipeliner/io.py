@@ -115,7 +115,7 @@ class JsonlSourceStep(BaseStep[_NullResult]):
         reader = JsonlReader(self._paths)
         yield from reader.read()
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any], None]) -> _NullResult:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> _NullResult:
         raise NotImplementedError("SOURCE step does not process items")
 
     @property

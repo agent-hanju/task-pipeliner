@@ -39,7 +39,7 @@ def main() -> None:
     if mode == "slow":
         config = PipelineConfig(
             pipeline=[
-                StepConfig(type="source", items=list(range(100))),
+                StepConfig(type="source", items=list(range(100)), outputs={"main": "slow"}),
                 StepConfig(type="slow", sleep_seconds=0.5),
             ],
             execution=ExecutionConfig(workers=1, queue_size=100, chunk_size=10),
@@ -47,7 +47,7 @@ def main() -> None:
     elif mode == "filter":
         config = PipelineConfig(
             pipeline=[
-                StepConfig(type="source", items=list(range(20))),
+                StepConfig(type="source", items=list(range(20)), outputs={"main": "filter_even"}),
                 StepConfig(type="filter_even"),
             ],
             execution=ExecutionConfig(workers=1, queue_size=100, chunk_size=50),
@@ -55,7 +55,7 @@ def main() -> None:
     else:
         config = PipelineConfig(
             pipeline=[
-                StepConfig(type="source", items=list(range(10))),
+                StepConfig(type="source", items=list(range(10)), outputs={"main": "passthrough"}),
                 StepConfig(type="passthrough"),
             ],
             execution=ExecutionConfig(workers=1, queue_size=100, chunk_size=50),

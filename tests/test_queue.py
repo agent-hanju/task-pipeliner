@@ -14,6 +14,7 @@ from dummy_steps import (
     FilterEvenStep,
     NullResult,
     PassthroughStep,
+    TerminalStep,
 )
 
 from task_pipeliner.producers import (
@@ -94,7 +95,7 @@ class TestInputProducer:
         step = DummySourceStep(items=[1, 2, 3])
         stats.register(step.name)
 
-        producer = InputProducer(step=step, output_queues=[out_q], stats=stats)
+        producer = InputProducer(step=step, output_queues={"main": [out_q]}, stats=stats)
         producer.run()
 
         collected = []
@@ -107,18 +108,19 @@ class TestInputProducer:
         assert collected == [1, 2, 3]
 
     @pytest.mark.timeout(10)
-    def test_increments_passed_stat(self) -> None:
-        """InputProducer should increment 'passed' for each item."""
+    def test_increments_processed_stat(self) -> None:
+        """InputProducer should increment 'processed' for each item."""
         ctx = multiprocessing.get_context("spawn")
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
         stats = StatsCollector()
         step = DummySourceStep(items=[10, 20, 30])
         stats.register(step.name)
 
-        producer = InputProducer(step=step, output_queues=[out_q], stats=stats)
+        producer = InputProducer(step=step, output_queues={"main": [out_q]}, stats=stats)
         producer.run()
 
-        assert stats._stats[step.name].passed == 3
+        assert stats._stats[step.name].processed == 3
+        assert stats._stats[step.name].emitted == {"main": 3}
 
     @pytest.mark.timeout(10)
     def test_calls_step_close(self) -> None:
@@ -129,7 +131,7 @@ class TestInputProducer:
         step = DummySourceStep(items=[1])
         stats.register(step.name)
 
-        producer = InputProducer(step=step, output_queues=[out_q], stats=stats)
+        producer = InputProducer(step=step, output_queues={"main": [out_q]}, stats=stats)
         producer.run()
 
         assert step.closed is True
@@ -144,7 +146,9 @@ class TestInputProducer:
         step = DummySourceStep(items=[])
         stats.register(step.name)
 
-        producer = InputProducer(step=step, output_queues=[out_q1, out_q2], stats=stats)
+        producer = InputProducer(
+            step=step, output_queues={"a": [out_q1], "b": [out_q2]}, stats=stats
+        )
         producer.run()
 
         assert is_sentinel(out_q1.get(timeout=2))
@@ -159,7 +163,7 @@ class TestInputProducer:
         step = DummySourceStep(items=[1, 2])
         stats.register(step.name)
 
-        producer = InputProducer(step=step, output_queues=[out_q], stats=stats)
+        producer = InputProducer(step=step, output_queues={"main": [out_q]}, stats=stats)
         producer.run()
 
         assert stats._stats[step.name].elapsed_seconds is not None
@@ -178,7 +182,7 @@ class TestBaseProducer:
         defaults: dict[str, Any] = {
             "step": step,
             "input_queue": ctx.Queue(),
-            "output_queues": [],
+            "output_queues": {},
             "stats": StatsCollector(),
             "result_queue": ctx.Queue(),
         }
@@ -195,7 +199,7 @@ class TestBaseProducer:
         out_q2: multiprocessing.Queue[object] = ctx.Queue()
         out_q3: multiprocessing.Queue[object] = ctx.Queue()
 
-        producer = self._make_producer(output_queues=[out_q1, out_q2, out_q3])
+        producer = self._make_producer(output_queues={"a": [out_q1], "b": [out_q2], "c": [out_q3]})
         producer._send_sentinel()
 
         assert isinstance(out_q1.get(timeout=2), Sentinel)
@@ -236,7 +240,7 @@ class TestBaseProducer:
         producer = _DummyProducer(
             step=step,
             input_queue=in_q,
-            output_queues=[out_q],
+            output_queues={"main": [out_q]},
             stats=stats,
             result_queue=result_q,
             state=state,
@@ -244,7 +248,7 @@ class TestBaseProducer:
         )
         assert producer.step is step
         assert producer.input_queue is in_q
-        assert producer.output_queues == [out_q]
+        assert producer.output_queues == {"main": [out_q]}
         assert producer.stats is stats
         assert producer.result_queue is result_q
         assert producer.state is state
@@ -256,23 +260,25 @@ class TestBaseProducer:
         out_q1: multiprocessing.Queue[object] = ctx.Queue()
         out_q2: multiprocessing.Queue[object] = ctx.Queue()
 
-        producer = self._make_producer(output_queues=[out_q1, out_q2])
+        producer = self._make_producer(output_queues={"main": [out_q1, out_q2]})
         emit = producer._make_emit()
-        emit({"data": 1})
+        emit({"data": 1}, "main")
 
         assert out_q1.get(timeout=2) == {"data": 1}
         assert out_q2.get(timeout=2) == {"data": 1}
 
     @pytest.mark.timeout(10)
-    def test_make_emit_increments_passed_stat(self) -> None:
-        producer = self._make_producer()
+    def test_make_emit_increments_emitted_stat(self) -> None:
+        ctx = multiprocessing.get_context("spawn")
+        out_q: multiprocessing.Queue[object] = ctx.Queue()
+        producer = self._make_producer(output_queues={"main": [out_q]})
         emit = producer._make_emit()
-        emit("item1")
-        emit("item2")
-        emit("item3")
+        emit("item1", "main")
+        emit("item2", "main")
+        emit("item3", "main")
 
         step_stats = producer.stats._stats[producer.step.name]
-        assert step_stats.passed == 3
+        assert step_stats.emitted == {"main": 3}
 
     @pytest.mark.timeout(10)
     def test_publish_result_puts_result_into_result_queue(self) -> None:
@@ -319,7 +325,7 @@ class TestSequentialProducer:
         producer = SequentialProducer(
             step=step,
             input_queue=in_q,
-            output_queues=[out_q],
+            output_queues={"main": [out_q]},
             stats=stats,
             result_queue=result_q,
             state=state,
@@ -347,7 +353,11 @@ class TestSequentialProducer:
         collected, result, stats = self._run_sequential(PassthroughStep(), items)
         assert collected == items
         step_stats = stats._stats["PassthroughStep"]
-        assert step_stats.passed == n
+        assert step_stats.processed == n
+        if n > 0:
+            assert step_stats.emitted == {"main": n}
+        else:
+            assert step_stats.emitted == {}
 
     @pytest.mark.timeout(15)
     def test_filter_even_step(self) -> None:
@@ -371,7 +381,7 @@ class TestSequentialProducer:
         producer = SequentialProducer(
             step=PassthroughStep(),
             input_queue=in_q,
-            output_queues=[out_q],
+            output_queues={"main": [out_q]},
             stats=stats,
             result_queue=result_q,
         )
@@ -390,11 +400,12 @@ class TestSequentialProducer:
         assert result.filtered == 5
 
     @pytest.mark.timeout(15)
-    def test_stats_passed_equals_emit_count(self) -> None:
+    def test_stats_processed_and_emitted(self) -> None:
         items = list(range(20))
         collected, result, stats = self._run_sequential(FilterEvenStep(), items)
         step_stats = stats._stats["FilterEvenStep"]
-        assert step_stats.passed == len(collected)
+        assert step_stats.processed == 20
+        assert step_stats.emitted == {"main": len(collected)}
 
     @pytest.mark.timeout(15)
     def test_error_items_skipped_and_counted(self) -> None:
@@ -406,7 +417,8 @@ class TestSequentialProducer:
         assert collected == [1, 2, 3, 4]
         step_stats = stats._stats["ErrorOnItemStep"]
         assert step_stats.errored == 2
-        assert step_stats.passed == 4
+        assert step_stats.processed == 4
+        assert step_stats.emitted == {"main": 4}
 
     @pytest.mark.timeout(15)
     def test_error_does_not_prevent_result_publish(self) -> None:
@@ -436,7 +448,7 @@ class TestSequentialProducer:
         producer = SequentialProducer(
             step=step,
             input_queue=in_q,
-            output_queues=[out_q],
+            output_queues={"main": [out_q]},
             stats=stats,
             result_queue=result_q,
         )
@@ -498,7 +510,7 @@ class TestParallelProducer:
         producer = ParallelProducer(
             step=step,
             input_queue=in_q,
-            output_queues=[out_q],
+            output_queues={"main": [out_q]},
             stats=stats,
             result_queue=result_q,
             state=state,
@@ -550,7 +562,7 @@ class TestParallelProducer:
         producer = ParallelProducer(
             step=PassthroughStep(),
             input_queue=in_q,
-            output_queues=[out_q],
+            output_queues={"main": [out_q]},
             stats=stats,
             result_queue=result_q,
             workers=2,
@@ -577,3 +589,151 @@ class TestParallelProducer:
         )
         assert sorted(collected) == [1, 2, 3, 4, 5, 6]
         assert isinstance(result, NullResult)
+
+
+# ---------------------------------------------------------------------------
+# W-T02: Tagged emit routing tests
+# ---------------------------------------------------------------------------
+
+
+class TestTaggedEmitRouting:
+    """Tests for dict-based output_queues with tag routing."""
+
+    @pytest.mark.timeout(10)
+    def test_emit_routes_to_correct_tag_queue(self) -> None:
+        """emit(item, 'main') puts item only into the 'main' tag's queues."""
+        ctx = multiprocessing.get_context("spawn")
+        q_main: multiprocessing.Queue[Any] = ctx.Queue()
+        q_other: multiprocessing.Queue[Any] = ctx.Queue()
+
+        stats = StatsCollector()
+        step = PassthroughStep()
+        stats.register(step.name)
+
+        producer = _DummyProducer(
+            step=step,
+            input_queue=ctx.Queue(),
+            output_queues={"main": [q_main], "other": [q_other]},
+            stats=stats,
+            result_queue=ctx.Queue(),
+        )
+        emit = producer._make_emit()
+        emit("hello", "main")
+
+        assert q_main.get(timeout=2) == "hello"
+        assert q_other.empty()
+
+    @pytest.mark.timeout(10)
+    def test_emit_unconnected_tag_is_silent_drop(self) -> None:
+        """emit(item, 'unknown') where tag has no queue mapping → silent drop."""
+        ctx = multiprocessing.get_context("spawn")
+        q_main: multiprocessing.Queue[Any] = ctx.Queue()
+
+        stats = StatsCollector()
+        step = PassthroughStep()
+        stats.register(step.name)
+
+        producer = _DummyProducer(
+            step=step,
+            input_queue=ctx.Queue(),
+            output_queues={"main": [q_main]},
+            stats=stats,
+            result_queue=ctx.Queue(),
+        )
+        emit = producer._make_emit()
+        emit("hello", "nonexistent")
+
+        assert q_main.empty()
+        # emitted stat should NOT be incremented for dropped items
+        assert stats._stats[step.name].emitted == {}
+
+    @pytest.mark.timeout(10)
+    def test_emit_on_terminal_step_raises_runtime_error(self) -> None:
+        """outputs = () step calling emit → RuntimeError."""
+        ctx = multiprocessing.get_context("spawn")
+
+        stats = StatsCollector()
+        step = TerminalStep()
+        stats.register(step.name)
+
+        producer = _DummyProducer(
+            step=step,
+            input_queue=ctx.Queue(),
+            output_queues={},
+            stats=stats,
+            result_queue=ctx.Queue(),
+        )
+        emit = producer._make_emit()
+
+        with pytest.raises(RuntimeError, match="no declared outputs"):
+            emit("item", "any_tag")
+
+    @pytest.mark.timeout(10)
+    def test_fanout_single_tag_multiple_queues(self) -> None:
+        """One tag connected to multiple queues → item goes to all."""
+        ctx = multiprocessing.get_context("spawn")
+        q1: multiprocessing.Queue[Any] = ctx.Queue()
+        q2: multiprocessing.Queue[Any] = ctx.Queue()
+
+        stats = StatsCollector()
+        step = PassthroughStep()
+        stats.register(step.name)
+
+        producer = _DummyProducer(
+            step=step,
+            input_queue=ctx.Queue(),
+            output_queues={"main": [q1, q2]},
+            stats=stats,
+            result_queue=ctx.Queue(),
+        )
+        emit = producer._make_emit()
+        emit("data", "main")
+
+        assert q1.get(timeout=2) == "data"
+        assert q2.get(timeout=2) == "data"
+
+    @pytest.mark.timeout(10)
+    def test_send_sentinel_to_all_tag_queues(self) -> None:
+        """_send_sentinel() puts sentinel into every unique queue across all tags."""
+        ctx = multiprocessing.get_context("spawn")
+        q1: multiprocessing.Queue[Any] = ctx.Queue()
+        q2: multiprocessing.Queue[Any] = ctx.Queue()
+
+        stats = StatsCollector()
+        step = PassthroughStep()
+        stats.register(step.name)
+
+        producer = _DummyProducer(
+            step=step,
+            input_queue=ctx.Queue(),
+            output_queues={"kept": [q1], "removed": [q2]},
+            stats=stats,
+            result_queue=ctx.Queue(),
+        )
+        producer._send_sentinel()
+
+        assert isinstance(q1.get(timeout=2), Sentinel)
+        assert isinstance(q2.get(timeout=2), Sentinel)
+
+    @pytest.mark.timeout(10)
+    def test_send_sentinel_deduplicates_shared_queue(self) -> None:
+        """If the same queue appears under multiple tags, sentinel sent only once."""
+        ctx = multiprocessing.get_context("spawn")
+        shared_q: multiprocessing.Queue[Any] = ctx.Queue()
+
+        stats = StatsCollector()
+        step = PassthroughStep()
+        stats.register(step.name)
+
+        producer = _DummyProducer(
+            step=step,
+            input_queue=ctx.Queue(),
+            output_queues={"tag_a": [shared_q], "tag_b": [shared_q]},
+            stats=stats,
+            result_queue=ctx.Queue(),
+        )
+        producer._send_sentinel()
+
+        assert isinstance(shared_q.get(timeout=2), Sentinel)
+        # Only one sentinel should have been sent
+        assert shared_q.empty()

@@ -19,9 +19,9 @@ _LOG_FORMAT = "%(asctime)s %(levelname)-5s %(name)s:%(funcName)s:%(lineno)d %(me
 @dataclass
 class StepStats:
     step_name: str
-    passed: int = 0
-    filtered: int = 0
+    processed: int = 0
     errored: int = 0
+    emitted: dict[str, int] = field(default_factory=dict)
     _start_time: float = field(default_factory=time.monotonic)
     _end_time: float | None = None
 
@@ -36,9 +36,9 @@ class StepStats:
     def to_dict(self) -> dict[str, object]:
         return {
             "step_name": self.step_name,
-            "passed": self.passed,
-            "filtered": self.filtered,
+            "processed": self.processed,
             "errored": self.errored,
+            "emitted": dict(self.emitted),
             "elapsed_seconds": round(self.elapsed_seconds, 4),
         }
 
@@ -60,6 +60,11 @@ class StatsCollector:
         with self._lock:
             stats = self._stats[step_name]
             setattr(stats, field, getattr(stats, field) + n)
+
+    def increment_emitted(self, step_name: str, tag: str, n: int = 1) -> None:
+        with self._lock:
+            emitted = self._stats[step_name].emitted
+            emitted[tag] = emitted.get(tag, 0) + n
 
     def finish(self, step_name: str) -> None:
         self._stats[step_name].finish()

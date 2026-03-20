@@ -44,6 +44,7 @@ class StepConfig(_WrappingModel):
 
     type: str
     enabled: bool = True
+    outputs: dict[str, str | list[str]] | None = None
 
 
 class ExecutionConfig(_WrappingModel):
@@ -71,6 +72,23 @@ class PipelineConfig(_WrappingModel):
     def _pipeline_not_empty(self) -> PipelineConfig:
         if not self.pipeline:
             raise ValueError("pipeline must not be empty")
+        return self
+
+    @model_validator(mode="after")
+    def _outputs_reference_valid_steps(self) -> PipelineConfig:
+        known_types = {step.type for step in self.pipeline}
+        for step in self.pipeline:
+            if step.outputs is None:
+                continue
+            for tag, targets in step.outputs.items():
+                if isinstance(targets, str):
+                    targets = [targets]
+                for target in targets:
+                    if target not in known_types:
+                        raise ValueError(
+                            f"step '{step.type}' outputs tag '{tag}' references "
+                            f"unknown step type '{target}'"
+                        )
         return self
 
 

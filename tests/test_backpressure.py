@@ -37,7 +37,7 @@ class TestBackpressure:
         producer = SequentialProducer(
             step=PassthroughStep(),
             input_queue=in_q,
-            output_queues=[out_q],
+            output_queues={"main": [out_q]},
             stats=stats,
             result_queue=result_q,
         )
@@ -78,7 +78,7 @@ class TestBackpressure:
         producer = SequentialProducer(
             step=PassthroughStep(),
             input_queue=in_q,
-            output_queues=[out_q],
+            output_queues={"main": [out_q]},
             stats=stats,
             result_queue=result_q,
         )
@@ -115,7 +115,7 @@ class TestBackpressure:
         producer = ParallelProducer(
             step=SlowStep(sleep_seconds=0.01),
             input_queue=in_q,
-            output_queues=[out_q],
+            output_queues={"main": [out_q]},
             stats=stats,
             result_queue=result_q,
             workers=2,

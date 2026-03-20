@@ -35,7 +35,7 @@ class TestFanOut:
         producer = SequentialProducer(
             step=PassthroughStep(),
             input_queue=in_q,
-            output_queues=[out_a, out_b],
+            output_queues={"main": [out_a, out_b]},
             stats=stats,
             result_queue=result_q,
         )
@@ -81,7 +81,7 @@ class TestStateEvent:
         producer = SequentialProducer(
             step=PassthroughStep(),
             input_queue=in_q,
-            output_queues=[out_q],
+            output_queues={"main": [out_q]},
             stats=stats,
             result_queue=result_q,
             ready_events=[evt],
@@ -121,7 +121,7 @@ class TestStateEvent:
         producer = SequentialProducer(
             step=PassthroughStep(),
             input_queue=in_q,
-            output_queues=[out_q],
+            output_queues={"main": [out_q]},
             stats=stats,
             result_queue=result_q,
             ready_events=[evt_a, evt_b],
@@ -182,7 +182,7 @@ class TestFanOutEndToEnd:
         source_producer = SequentialProducer(
             step=PassthroughStep(),
             input_queue=source_q,
-            output_queues=[queue_a, queue_b],
+            output_queues={"main": [queue_a, queue_b]},
             stats=stats,
             result_queue=result_src,
         )
@@ -191,7 +191,7 @@ class TestFanOutEndToEnd:
         producer_a = SequentialProducer(
             step=StateAwareStep(),
             input_queue=queue_a,
-            output_queues=[out_a],
+            output_queues={"main": [out_a]},
             stats=stats,
             result_queue=result_qa,
             state=state_a,
@@ -205,7 +205,7 @@ class TestFanOutEndToEnd:
         producer_b = SequentialProducer(
             step=PassthroughStep(),
             input_queue=queue_b,
-            output_queues=[out_b],
+            output_queues={"main": [out_b]},
             stats=stats,
             result_queue=result_qb,
             next_state_setter=on_b_done,

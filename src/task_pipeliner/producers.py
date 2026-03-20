@@ -54,10 +54,10 @@ class InputProducer:
         self,
         *,
         step: BaseStep[Any],
-        output_queues: list[multiprocessing.Queue[Any]],
+        output_queues: dict[str, list[multiprocessing.Queue[Any]]],
         stats: StatsCollector | None = None,
     ) -> None:
-        logger.debug("step=%s output_queues=%d", step.name, len(output_queues))
+        logger.debug("step=%s output_queues=%d tags", step.name, len(output_queues))
         self._step = step
         self._output_queues = output_queues
         self._stats = stats
@@ -67,15 +67,23 @@ class InputProducer:
         logger.info("input producer started step=%s", self._step.name)
         try:
             for item in self._step.items():
-                for q in self._output_queues:
-                    q.put(item)
+                for tag, tag_queues in self._output_queues.items():
+                    for q in tag_queues:
+                        q.put(item)
+                    if self._stats is not None:
+                        self._stats.increment_emitted(self._step.name, tag)
                 if self._stats is not None:
-                    self._stats.increment(self._step.name, "passed")
+                    self._stats.increment(self._step.name, "processed")
         finally:
             self._step.close()
             sentinel = Sentinel()
-            for q in self._output_queues:
-                q.put(sentinel)
+            seen: set[int] = set()
+            for tag_queues in self._output_queues.values():
+                for q in tag_queues:
+                    qid = id(q)
+                    if qid not in seen:
+                        q.put(sentinel)
+                        seen.add(qid)
             if self._stats is not None:
                 self._stats.finish(self._step.name)
             logger.info("input producer finished step=%s", self._step.name)
@@ -98,7 +106,7 @@ class BaseProducer(ABC, multiprocessing.Process):
         *,
         step: BaseStep[Any],
         input_queue: multiprocessing.Queue[Any],
-        output_queues: list[multiprocessing.Queue[Any]],
+        output_queues: dict[str, list[multiprocessing.Queue[Any]]],
         stats: StatsCollector,
         result_queue: multiprocessing.Queue[Any],
         state: Any = None,
@@ -106,7 +114,7 @@ class BaseProducer(ABC, multiprocessing.Process):
         next_state_setter: Callable[[Any], None] | None = None,
     ) -> None:
         logger.debug(
-            "step=%s output_queues=%d",
+            "step=%s output_queues=%d tags",
             step.name,
             len(output_queues),
         )
@@ -122,17 +130,30 @@ class BaseProducer(ABC, multiprocessing.Process):
 
     # -- helpers -------------------------------------------------------------
 
-    def _make_emit(self) -> Callable[[Any], None]:
-        """Return a callback that forwards an item to every output queue
-        and increments the *passed* stat counter."""
-        queues = self.output_queues
+    def _make_emit(self) -> Callable[[Any, str], None]:
+        """Return a callback that routes an item to the queues for the given tag.
+
+        - ``outputs = ()`` → emit raises ``RuntimeError``
+        - unconnected tag → silent drop (DEBUG log)
+        - connected tag → put into each queue for that tag
+        """
+        queues_by_tag = self.output_queues
         step_name = self.step.name
+        step_outputs = self.step.outputs
         stats = self.stats
 
-        def emit(item: Any) -> None:
-            for q in queues:
+        def emit(item: Any, tag: str) -> None:
+            if not step_outputs:
+                raise RuntimeError(
+                    f"Step '{step_name}' has no declared outputs — emit() not allowed"
+                )
+            tag_queues = queues_by_tag.get(tag)
+            if tag_queues is None:
+                logger.debug("unconnected tag=%s step=%s — dropped", tag, step_name)
+                return
+            for q in tag_queues:
                 q.put(item)
-            stats.increment(step_name, "passed")
+            stats.increment_emitted(step_name, tag)
 
         return emit
 
@@ -146,15 +167,20 @@ class BaseProducer(ABC, multiprocessing.Process):
         logger.debug("all ready events set")
 
     def _send_sentinel(self) -> None:
-        """Put a Sentinel into each output queue."""
+        """Put a Sentinel into each unique output queue across all tags."""
+        sentinel = Sentinel()
+        seen: set[int] = set()
+        for tag_queues in self.output_queues.values():
+            for q in tag_queues:
+                qid = id(q)
+                if qid not in seen:
+                    q.put(sentinel)
+                    seen.add(qid)
         logger.info(
-            "sending sentinel to %d output queue(s) step=%s",
-            len(self.output_queues),
+            "sent sentinel to %d unique queue(s) step=%s",
+            len(seen),
             self.step.name,
         )
-        sentinel = Sentinel()
-        for q in self.output_queues:
-            q.put(sentinel)
 
     def _publish_result(self, result: BaseResult) -> None:
         """Send accumulated result to the result queue."""
@@ -188,6 +214,7 @@ class SequentialProducer(BaseProducer):
                 try:
                     result = self.step.process(item, self.state, emit)
                     accumulated = result if accumulated is None else accumulated.merge(result)
+                    self.stats.increment(self.step.name, "processed")
                 except Exception:
                     self.stats.increment(self.step.name, "errored")
                     logger.warning(
@@ -211,10 +238,10 @@ class SequentialProducer(BaseProducer):
 # Module-level worker function (must be picklable)
 # ---------------------------------------------------------------------------
 
-_worker_output_queues: list[multiprocessing.Queue[Any]] = []
+_worker_output_queues: dict[str, list[multiprocessing.Queue[Any]]] = {}
 
 
-def _init_worker(output_queues: list[multiprocessing.Queue[Any]]) -> None:
+def _init_worker(output_queues: dict[str, list[multiprocessing.Queue[Any]]]) -> None:
     """Initializer for ProcessPoolExecutor workers — stores queues in a global."""
     global _worker_output_queues  # noqa: PLW0603
     _worker_output_queues = output_queues
@@ -224,23 +251,31 @@ def _parallel_worker(
     chunk: list[Any],
     step: BaseStep[Any],
     state: Any,
-) -> tuple[BaseResult | None, int, int]:
+) -> tuple[BaseResult | None, int, int, dict[str, int]]:
     """Process a chunk of items in a worker process.
 
     Items are collected locally during processing, then put into
     output queues in bulk after the chunk is done — reduces lock
     contention compared to per-item put.
 
-    Returns (accumulated_result, passed_count, errored_count).
+    Returns (accumulated_result, processed_count, errored_count, emitted_by_tag).
     """
     accumulated: BaseResult | None = None
-    emitted: list[Any] = []
+    emitted: list[tuple[Any, str]] = []
+    processed = 0
     errored = 0
+    step_outputs = step.outputs
+
+    def _buffer_emit(item: Any, tag: str) -> None:
+        if not step_outputs:
+            raise RuntimeError(f"Step '{step.name}' has no declared outputs — emit() not allowed")
+        emitted.append((item, tag))
 
     for item in chunk:
         try:
-            result = step.process(item, state, emitted.append)
+            result = step.process(item, state, _buffer_emit)
             accumulated = result if accumulated is None else accumulated.merge(result)
+            processed += 1
         except Exception:
             errored += 1
             logger.warning(
@@ -250,12 +285,18 @@ def _parallel_worker(
                 exc_info=True,
             )
 
-    # Bulk put — concentrated lock contention instead of interleaved
-    for out_item in emitted:
-        for q in _worker_output_queues:
+    # Bulk put — tag-based routing
+    emitted_by_tag: dict[str, int] = {}
+    for out_item, tag in emitted:
+        tag_queues = _worker_output_queues.get(tag)
+        if tag_queues is None:
+            logger.debug("unconnected tag=%s step=%s — dropped", tag, step.name)
+            continue
+        for q in tag_queues:
             q.put(out_item)
+        emitted_by_tag[tag] = emitted_by_tag.get(tag, 0) + 1
 
-    return accumulated, len(emitted), errored
+    return accumulated, processed, errored, emitted_by_tag
 
 
 # ---------------------------------------------------------------------------
@@ -327,10 +368,12 @@ class ParallelProducer(BaseProducer):
 
                 # Collect results
                 for future in as_completed(futures):
-                    chunk_result, passed, errored = future.result()
-                    self.stats.increment(self.step.name, "passed", passed)
+                    chunk_result, processed, errored, emitted_by_tag = future.result()
+                    self.stats.increment(self.step.name, "processed", processed)
                     if errored:
                         self.stats.increment(self.step.name, "errored", errored)
+                    for tag, count in emitted_by_tag.items():
+                        self.stats.increment_emitted(self.step.name, tag, count)
                     if chunk_result is not None:
                         accumulated = (
                             chunk_result if accumulated is None else accumulated.merge(chunk_result)

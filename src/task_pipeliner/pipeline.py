@@ -49,7 +49,17 @@ class Pipeline:
             cfg = config
 
         # Inject JSONL SOURCE step at the beginning of the pipeline
-        source_cfg = StepConfig(type=_JSONL_SOURCE_TYPE, paths=[str(p) for p in inputs])  # type: ignore[call-arg]
+        # Wire source outputs to the first enabled user step
+        enabled_user_steps = [s for s in cfg.pipeline if s.enabled]
+        source_outputs: dict[str, str | list[str]] | None = None
+        if enabled_user_steps:
+            source_outputs = {"main": enabled_user_steps[0].type}
+
+        source_cfg = StepConfig(  # type: ignore[call-arg]
+            type=_JSONL_SOURCE_TYPE,
+            paths=[str(p) for p in inputs],
+            outputs=source_outputs,
+        )
         cfg = PipelineConfig(
             pipeline=[source_cfg, *cfg.pipeline],
             execution=cfg.execution,

@@ -59,7 +59,7 @@ class TestPipeline:
         assert stats_file.exists()
         data = orjson.loads(stats_file.read_bytes())
         pt = next(d for d in data if d["step_name"] == "PassthroughStep")
-        assert pt["passed"] == 5
+        assert pt["processed"] == 5
 
     @pytest.mark.timeout(30)
     def test_run_with_config_object(self, tmp_path: Path) -> None:
@@ -82,7 +82,7 @@ class TestPipeline:
         assert stats_file.exists()
         data = orjson.loads(stats_file.read_bytes())
         fe = next(d for d in data if d["step_name"] == "FilterEvenStep")
-        assert fe["passed"] == 5
+        assert fe["processed"] == 10
 
     def test_run_unregistered_step_raises(self, tmp_path: Path) -> None:
         """run() with unregistered step → StepRegistrationError."""
