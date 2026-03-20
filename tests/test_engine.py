@@ -11,7 +11,6 @@ from dummy_steps import FilterEvenStep, PassthroughStep
 from task_pipeliner.config import ExecutionConfig, PipelineConfig, StepConfig
 from task_pipeliner.engine import PipelineEngine, StepRegistry
 from task_pipeliner.exceptions import StepRegistrationError
-from task_pipeliner.io import JsonlWriter
 from task_pipeliner.stats import StatsCollector
 
 # ---------------------------------------------------------------------------
@@ -93,8 +92,7 @@ class TestPipelineEngine:
             {"passthrough": PassthroughStep},
         )
         output_dir = tmp_path / "out"
-        with JsonlWriter(output_dir) as writer:
-            engine.run(input_items=iter(range(10)), writer=writer, output_dir=output_dir)
+        engine.run(input_items=iter(range(10)), output_dir=output_dir)
         assert stats._stats["PassthroughStep"].passed == 10
 
     @pytest.mark.timeout(30)
@@ -105,8 +103,7 @@ class TestPipelineEngine:
             {"filter_even": FilterEvenStep},
         )
         output_dir = tmp_path / "out"
-        with JsonlWriter(output_dir) as writer:
-            engine.run(input_items=iter(range(10)), writer=writer, output_dir=output_dir)
+        engine.run(input_items=iter(range(10)), output_dir=output_dir)
         assert stats._stats["FilterEvenStep"].passed == 5
 
     @pytest.mark.timeout(30)
@@ -117,8 +114,7 @@ class TestPipelineEngine:
             {"filter_even": FilterEvenStep},
         )
         output_dir = tmp_path / "out"
-        with JsonlWriter(output_dir) as writer:
-            engine.run(input_items=iter(range(10)), writer=writer, output_dir=output_dir)
+        engine.run(input_items=iter(range(10)), output_dir=output_dir)
         result_file = output_dir / "count_result.json"
         assert result_file.exists()
         data = orjson.loads(result_file.read_bytes())
@@ -133,8 +129,7 @@ class TestPipelineEngine:
             {"passthrough": PassthroughStep, "filter_even": FilterEvenStep},
         )
         output_dir = tmp_path / "out"
-        with JsonlWriter(output_dir) as writer:
-            engine.run(input_items=iter(range(10)), writer=writer, output_dir=output_dir)
+        engine.run(input_items=iter(range(10)), output_dir=output_dir)
         assert stats._stats["PassthroughStep"].passed == 10
         assert stats._stats["FilterEvenStep"].passed == 5
 
@@ -149,8 +144,7 @@ class TestPipelineEngine:
             {"passthrough": PassthroughStep, "filter_even": FilterEvenStep},
         )
         output_dir = tmp_path / "out"
-        with JsonlWriter(output_dir) as writer:
-            engine.run(input_items=iter(range(10)), writer=writer, output_dir=output_dir)
+        engine.run(input_items=iter(range(10)), output_dir=output_dir)
         assert "PassthroughStep" not in stats._stats
         assert stats._stats["FilterEvenStep"].passed == 5
 
@@ -162,8 +156,7 @@ class TestPipelineEngine:
             {"passthrough": PassthroughStep},
         )
         output_dir = tmp_path / "out"
-        with JsonlWriter(output_dir) as writer:
-            engine.run(input_items=iter(range(5)), writer=writer, output_dir=output_dir)
+        engine.run(input_items=iter(range(5)), output_dir=output_dir)
         stats_file = output_dir / "stats.json"
         assert stats_file.exists()
         data = orjson.loads(stats_file.read_bytes())
@@ -179,8 +172,7 @@ class TestPipelineEngine:
             {"passthrough": PassthroughStep},
         )
         output_dir = tmp_path / "out"
-        with JsonlWriter(output_dir) as writer:
-            engine.run(input_items=iter([]), writer=writer, output_dir=output_dir)
+        engine.run(input_items=iter([]), output_dir=output_dir)
         assert stats._stats["PassthroughStep"].passed == 0
 
     def test_unregistered_step_in_config(self, tmp_path: Path) -> None:
@@ -191,22 +183,4 @@ class TestPipelineEngine:
         engine = PipelineEngine(config=config, registry=registry, stats=stats)
         output_dir = tmp_path / "out"
         with pytest.raises(StepRegistrationError):
-            with JsonlWriter(output_dir) as writer:
-                engine.run(input_items=iter([1]), writer=writer, output_dir=output_dir)
-
-    @pytest.mark.timeout(30)
-    def test_kept_jsonl_output(self, tmp_path: Path) -> None:
-        """Final output items are written to kept.jsonl via writer."""
-        engine, stats = self._make_engine(
-            [StepConfig(type="filter_even")],
-            {"filter_even": FilterEvenStep},
-        )
-        output_dir = tmp_path / "out"
-        with JsonlWriter(output_dir) as writer:
-            engine.run(input_items=iter(range(10)), writer=writer, output_dir=output_dir)
-        kept = output_dir / "kept.jsonl"
-        assert kept.exists()
-        lines = [line for line in kept.read_bytes().split(b"\n") if line.strip()]
-        assert len(lines) == 5
-        values = sorted(orjson.loads(line) for line in lines)
-        assert values == [0, 2, 4, 6, 8]
+            engine.run(input_items=iter([1]), output_dir=output_dir)

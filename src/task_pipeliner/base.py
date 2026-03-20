@@ -56,6 +56,13 @@ class BaseStep[R: BaseResult](ABC):
         """
         ...
 
+    def close(self) -> None:
+        """Release resources held by this step.
+
+        Called by the Producer after the processing loop finishes.
+        Override in subclasses that open files, connections, etc.
+        """
+
 
 class BaseAggStep(ABC):
     """Abstract base for batch/aggregation steps."""

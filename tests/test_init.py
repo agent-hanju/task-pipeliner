@@ -25,8 +25,9 @@ class TestPublicAPI:
         assert StepType is not None
 
     def test_producers_importable(self) -> None:
-        from task_pipeliner import ParallelProducer, SequentialProducer
+        from task_pipeliner import InputProducer, ParallelProducer, SequentialProducer
 
+        assert InputProducer is not None
         assert SequentialProducer is not None
         assert ParallelProducer is not None
 
@@ -49,6 +50,7 @@ class TestPublicAPI:
             "BaseAggStep",
             "BaseResult",
             "StepType",
+            "InputProducer",
             "ParallelProducer",
             "SequentialProducer",
             "PipelineError",

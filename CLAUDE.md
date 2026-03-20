@@ -36,7 +36,14 @@
 - `src/task_pipeliner/` — package source (`src/` layout)
 - `tests/` — framework tests (dummy steps only, no business logic)
 - `docs/` — PRD, tech stack, WBS documents
+- `sample/` — sample projects using task-pipeliner
 - `pyproject.toml` — package metadata, dependencies, build config
+
+## Sample Projects
+
+When working under the `sample/` directory, follow each sample project's own `CLAUDE.md` in addition to this file.
+
+- `sample/taxonomy-converter/` — Naver news taxonomy converter (`sample/taxonomy-converter/CLAUDE.md`)
 
 ## Important Notes
 

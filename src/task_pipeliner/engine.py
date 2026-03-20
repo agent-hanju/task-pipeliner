@@ -14,8 +14,12 @@ from typing import Any
 from task_pipeliner.base import BaseResult, BaseStep, StepType
 from task_pipeliner.config import PipelineConfig
 from task_pipeliner.exceptions import StepRegistrationError
-from task_pipeliner.io import JsonlWriter
-from task_pipeliner.producers import ParallelProducer, Sentinel, SequentialProducer, is_sentinel
+from task_pipeliner.producers import (
+    InputProducer,
+    ParallelProducer,
+    Sentinel,
+    SequentialProducer,
+)
 from task_pipeliner.stats import StatsCollector
 
 logger = logging.getLogger(__name__)
@@ -97,7 +101,6 @@ class PipelineEngine:
         self,
         *,
         input_items: Generator[Any, None, None] | Any,
-        writer: JsonlWriter,
         output_dir: Path,
     ) -> None:
         """Build and execute the full pipeline."""
@@ -121,12 +124,12 @@ class PipelineEngine:
             extra = step_cfg.model_extra or {}
             step_instances.append(cls(**extra))
 
-        # Build queue chain
+        # Build queue chain: N queues for N steps
+        # InputProducer → Q0 → Step0 → Q1 → ... → QN-2 → StepN-1 (no output)
+        n_steps = len(step_instances)
         queues: list[multiprocessing.Queue[Any]] = []
-        for _ in range(len(step_instances) + 1):
+        for _ in range(n_steps):
             queues.append(ctx.Queue(maxsize=self.config.execution.queue_size))
-        # queues[0] = input, queues[i+1] = output of step i
-        # queues[-1] = final output
 
         # Result queues — one per step
         result_queues: list[multiprocessing.Queue[Any]] = [ctx.Queue() for _ in step_instances]
@@ -135,11 +138,17 @@ class PipelineEngine:
         for step in step_instances:
             self.stats.register(step.name)
 
-        # Build producers
+        # InputProducer feeds into first queue
+        input_producer = InputProducer(
+            input_items=input_items,
+            output_queues=[queues[0]],
+        )
+
+        # Build step producers
         producers: list[SequentialProducer | ParallelProducer] = []
         for i, step in enumerate(step_instances):
             in_q = queues[i]
-            out_qs = [queues[i + 1]]
+            out_qs = [queues[i + 1]] if i < n_steps - 1 else []
             rq = result_queues[i]
             if step.step_type == StepType.PARALLEL:
                 producers.append(
@@ -166,15 +175,8 @@ class PipelineEngine:
 
         logger.debug("built %d producers", len(producers))
 
-        # Feeder thread — pushes input items into queues[0]
-        def _feed() -> None:
-            try:
-                for item in input_items:
-                    queues[0].put(item)
-            finally:
-                queues[0].put(Sentinel())
-
-        feeder = threading.Thread(target=_feed, daemon=True)
+        # InputProducer thread
+        feeder = threading.Thread(target=input_producer.run, daemon=True)
 
         # Producer threads — each runs producer.run() in a thread
         producer_threads = [threading.Thread(target=p.run, daemon=True) for p in producers]
@@ -195,26 +197,18 @@ class PipelineEngine:
             if hasattr(signal, "SIGBREAK"):
                 signal.signal(signal.SIGBREAK, _signal_handler)
 
-            # Start feeder + all producers
+            # Start input producer + all step producers
             feeder.start()
             for t in producer_threads:
                 t.start()
 
-            # Drain final output queue → writer
-            final_q = queues[-1]
-            while True:
-                if shutdown_event.is_set():
-                    logger.warning("shutdown requested — stopping drain")
-                    break
-                try:
-                    obj = final_q.get(timeout=1)
-                except Exception:
-                    if shutdown_event.is_set():
-                        break
-                    continue
-                if is_sentinel(obj):
-                    break
-                writer.write_kept(obj)
+            # Wait for all producer threads to finish
+            # The last producer will finish when it receives a sentinel
+            # from the previous producer (chain propagation).
+            join_timeout = 5 if shutdown_event.is_set() else 30
+            feeder.join(timeout=join_timeout)
+            for t in producer_threads:
+                t.join(timeout=join_timeout)
 
             # On shutdown, inject sentinels to unblock blocked producers
             if shutdown_event.is_set():
@@ -223,12 +217,10 @@ class PipelineEngine:
                         q.put_nowait(Sentinel())
                     except Exception:
                         pass
+                # Re-join with short timeout after sentinel injection
+                for t in producer_threads:
+                    t.join(timeout=5)
 
-            # Wait for all threads to finish
-            join_timeout = 5 if shutdown_event.is_set() else 30
-            feeder.join(timeout=join_timeout)
-            for t in producer_threads:
-                t.join(timeout=join_timeout)
             for t in producer_threads:
                 if t.is_alive():
                     logger.warning("producer thread still alive after join timeout")
@@ -242,6 +234,7 @@ class PipelineEngine:
             # Collect and write results
             import queue as _queue
 
+            output_dir.mkdir(parents=True, exist_ok=True)
             for i, rq in enumerate(result_queues):
                 try:
                     result: BaseResult = rq.get(timeout=2)

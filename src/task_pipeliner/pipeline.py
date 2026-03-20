@@ -7,7 +7,7 @@ from pathlib import Path
 
 from task_pipeliner.config import PipelineConfig, load_config
 from task_pipeliner.engine import PipelineEngine, StepRegistry
-from task_pipeliner.io import JsonlReader, JsonlWriter
+from task_pipeliner.io import JsonlReader
 from task_pipeliner.stats import StatsCollector
 
 logger = logging.getLogger(__name__)
@@ -54,8 +54,7 @@ class Pipeline:
             reader = JsonlReader(inputs)
             input_items = reader.read()
 
-            with JsonlWriter(output_dir) as writer:
-                engine.run(input_items=input_items, writer=writer, output_dir=output_dir)
+            engine.run(input_items=input_items, output_dir=output_dir)
 
             logger.info("pipeline run completed config=%s", config)
         finally:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import multiprocessing
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing.synchronize import Event
 from typing import Any
@@ -36,6 +36,42 @@ class ErrorSentinel(Sentinel):
 def is_sentinel(obj: object) -> bool:
     """Return True if *obj* is any kind of sentinel."""
     return isinstance(obj, Sentinel)
+
+
+# ---------------------------------------------------------------------------
+# InputProducer
+# ---------------------------------------------------------------------------
+
+
+class InputProducer:
+    """Feeds items from an iterable into output queues.
+
+    Replaces the engine's feeder thread — makes the input source
+    an explicit producer in the pipeline chain.
+    """
+
+    def __init__(
+        self,
+        *,
+        input_items: Generator[Any, None, None] | Any,
+        output_queues: list[multiprocessing.Queue[Any]],
+    ) -> None:
+        logger.debug("output_queues=%d", len(output_queues))
+        self._input_items = input_items
+        self._output_queues = output_queues
+
+    def run(self) -> None:
+        """Iterate input items into output queues, then send sentinel."""
+        logger.info("input producer started")
+        try:
+            for item in self._input_items:
+                for q in self._output_queues:
+                    q.put(item)
+        finally:
+            sentinel = Sentinel()
+            for q in self._output_queues:
+                q.put(sentinel)
+            logger.info("input producer finished")
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +190,7 @@ class SequentialProducer(BaseProducer):
                         exc_info=True,
                     )
         finally:
+            self.step.close()
             if accumulated is not None:
                 self._publish_result(accumulated)
             self.stats.finish(self.step.name)
@@ -294,6 +331,7 @@ class ParallelProducer(BaseProducer):
             finally:
                 executor.shutdown(wait=True)
         finally:
+            self.step.close()
             if accumulated is not None:
                 self._publish_result(accumulated)
             self.stats.finish(self.step.name)

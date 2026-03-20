@@ -10,7 +10,6 @@ from dummy_steps import FilterEvenStep, PassthroughStep, SlowStep
 
 from task_pipeliner.config import ExecutionConfig, PipelineConfig, StepConfig
 from task_pipeliner.engine import PipelineEngine, StepRegistry
-from task_pipeliner.io import JsonlWriter
 from task_pipeliner.stats import StatsCollector
 
 
@@ -58,8 +57,7 @@ def main() -> None:
     stats = StatsCollector()
     engine = PipelineEngine(config=config, registry=registry, stats=stats)
 
-    with JsonlWriter(output_dir) as writer:
-        engine.run(input_items=items, writer=writer, output_dir=output_dir)
+    engine.run(input_items=items, output_dir=output_dir)
 
 
 if __name__ == "__main__":

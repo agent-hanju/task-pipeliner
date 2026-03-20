@@ -141,7 +141,7 @@ class TestFilterCommand:
             obj=self._pipeline_obj(),
         )
         assert result.exit_code == 0, result.output
-        assert (output_dir / "kept.jsonl").exists()
+        assert (output_dir / "stats.json").exists()
 
     @pytest.mark.parametrize(
         "args,match",

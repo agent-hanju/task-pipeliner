@@ -37,7 +37,14 @@
 - `src/task_pipeliner/` — 패키지 본체 (`src/` 레이아웃)
 - `tests/` — 프레임워크 테스트 (dummy step만 사용, 비즈니스 로직 없음)
 - `docs/` — PRD, 기술 스택, WBS 문서
+- `sample/` — task-pipeliner 활용 샘플 프로젝트
 - `pyproject.toml` — 패키지 메타데이터, 의존성, 빌드 설정
+
+## 샘플 프로젝트
+
+`sample/` 디렉토리 하위 개발 시, 이 파일과 함께 각 샘플 프로젝트의 `CLAUDE.md`를 따른다.
+
+- `sample/taxonomy-converter/` — 네이버 뉴스 taxonomy 변환기 (`sample/taxonomy-converter/CLAUDE.md`)
 
 ## 주의사항
 

@@ -7,7 +7,7 @@ from task_pipeliner.exceptions import (
     StepRegistrationError,
 )
 from task_pipeliner.pipeline import Pipeline
-from task_pipeliner.producers import ParallelProducer, SequentialProducer
+from task_pipeliner.producers import InputProducer, ParallelProducer, SequentialProducer
 
 __all__ = [
     "Pipeline",
@@ -15,6 +15,7 @@ __all__ = [
     "BaseAggStep",
     "BaseResult",
     "StepType",
+    "InputProducer",
     "ParallelProducer",
     "SequentialProducer",
     "PipelineError",
