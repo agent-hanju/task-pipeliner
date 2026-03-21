@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-from collections import Counter
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,7 +10,7 @@ from typing import Any, Self
 
 import orjson
 
-from task_pipeliner.base import BaseAggStep, BaseResult, BaseStep, StepType
+from task_pipeliner.base import BaseResult, BaseStep, StepType
 
 # ---------------------------------------------------------------------------
 # Dummy result types
@@ -58,7 +57,7 @@ class DummySourceStep(BaseStep[NullResult]):
 
     outputs = ("main",)
 
-    def __init__(self, items: list[Any] | None = None) -> None:
+    def __init__(self, items: list[Any] | None = None, **_kwargs: Any) -> None:
         self._items = items or []
         self.closed = False
 
@@ -74,6 +73,30 @@ class DummySourceStep(BaseStep[NullResult]):
 
     def close(self) -> None:
         self.closed = True
+
+
+class DummyJsonlSourceStep(BaseStep[NullResult]):
+    """SOURCE step that reads JSONL files (for testing)."""
+
+    outputs = ("main",)
+
+    def __init__(self, items: list[str] | None = None, **_kwargs: Any) -> None:
+        self._paths = [Path(p) for p in items] if items else []
+
+    @property
+    def step_type(self) -> StepType:
+        return StepType.SOURCE
+
+    def items(self) -> Generator[Any, None, None]:
+        for p in self._paths:
+            with open(p, "rb") as fh:
+                for line in fh:
+                    stripped = line.strip()
+                    if stripped:
+                        yield orjson.loads(stripped)
+
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> NullResult:
+        raise NotImplementedError("SOURCE step does not process")
 
 
 class PassthroughStep(BaseStep[NullResult]):
@@ -172,13 +195,6 @@ class BranchEvenOddStep(BaseStep[NullResult]):
         return NullResult()
 
 
-class CountingAggStep(BaseAggStep):
-    """Returns a Counter of items."""
-
-    def process_batch(self, items: list[Any]) -> Counter[Any]:
-        return Counter(items)
-
-
 class StateAwareStep(BaseStep[NullResult]):
     """Multiplies item by state['multiplier'] and emits."""
 
@@ -192,6 +208,50 @@ class StateAwareStep(BaseStep[NullResult]):
         self, item: int, state: dict[str, Any], emit: Callable[[Any, str], None]
     ) -> NullResult:
         emit(state["multiplier"] * item, "main")
+        return NullResult()
+
+
+class CollectorStep(BaseStep[NullResult]):
+    """SEQUENTIAL terminal — collects items, sets another step's state on close."""
+
+    def __init__(self, target_step: str = "StateGatedStep") -> None:
+        self._collected: list[Any] = []
+        self._target_step = target_step
+
+    @property
+    def step_type(self) -> StepType:
+        return StepType.SEQUENTIAL
+
+    @property
+    def initial_state(self) -> list[Any]:
+        return self._collected
+
+    def process(
+        self, item: Any, state: list[Any], emit: Callable[[Any, str], None]
+    ) -> NullResult:
+        state.append(item)
+        return NullResult()
+
+    def close(self) -> None:
+        self.set_step_state(self._target_step, list(self._collected))
+
+
+class StateGatedStep(BaseStep[NullResult]):
+    """SEQUENTIAL step gated by is_ready — waits until state is not None."""
+
+    outputs = ("main",)
+
+    @property
+    def step_type(self) -> StepType:
+        return StepType.SEQUENTIAL
+
+    def is_ready(self, state: Any) -> bool:
+        return state is not None
+
+    def process(
+        self, item: Any, state: list[Any], emit: Callable[[Any, str], None]
+    ) -> NullResult:
+        emit({"item": item, "state_len": len(state)}, "main")
         return NullResult()
 
 

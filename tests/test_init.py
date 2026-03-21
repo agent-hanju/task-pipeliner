@@ -17,10 +17,9 @@ class TestPublicAPI:
         assert Pipeline is not None
 
     def test_base_classes_importable(self) -> None:
-        from task_pipeliner import BaseAggStep, BaseResult, BaseStep, StepType
+        from task_pipeliner import BaseResult, BaseStep, StepType
 
         assert BaseStep is not None
-        assert BaseAggStep is not None
         assert BaseResult is not None
         assert StepType is not None
 
@@ -42,27 +41,16 @@ class TestPublicAPI:
         assert StepRegistrationError is not None
         assert ConfigValidationError is not None
 
-    def test_io_classes_importable(self) -> None:
-        from task_pipeliner import JsonlReader, JsonlSourceStep, JsonlWriter
-
-        assert JsonlReader is not None
-        assert JsonlWriter is not None
-        assert JsonlSourceStep is not None
-
     def test_all_completeness(self) -> None:
         """__all__ contains all expected public symbols."""
         expected = {
             "Pipeline",
             "BaseStep",
-            "BaseAggStep",
             "BaseResult",
             "StepType",
             "InputProducer",
             "ParallelProducer",
             "SequentialProducer",
-            "JsonlReader",
-            "JsonlWriter",
-            "JsonlSourceStep",
             "PipelineError",
             "StepRegistrationError",
             "ConfigValidationError",

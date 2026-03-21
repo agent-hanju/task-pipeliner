@@ -263,6 +263,48 @@ M-11 + M-12 + M-13 → M-14 (통합 검증) → M-15 (문서)       │
   stats.json    ← 완료 후 최종 메트릭 (기존 + 신규 타이밍 필드)
 ```
 
+---
+
+## Phase 8: Step 간 동적 state 주입 + is_ready 게이팅
+
+### M-16: BaseStep.is_ready + set_step_state
+> Step이 다른 Step의 state를 동적으로 설정하고, 수신 Step이 is_ready로 처리 시작을 제어.
+
+- [x] base.py: `is_ready(state) -> bool` 메서드 추가 (기본 True)
+- [x] base.py: `set_step_state(target, state)` 메서드 + `_state_dispatch` 콜백 속성 추가
+- [x] base.py: `__getstate__`/`__setstate__`로 pickle 시 `_state_dispatch` 제외
+- [x] dummy_steps.py: `CollectorStep`, `StateGatedStep` 추가
+- [x] 테스트: is_ready 기본값, 오버라이드, set_step_state 콜백 동작
+- 의존: M-02
+
+### M-17: Producer is_ready 게이팅
+> Producer가 is_ready=False일 때 처리를 유보하고, state 변경 이벤트에 의해 재평가.
+
+- [x] producers.py: `state_changed_event: threading.Event` 파라미터 추가
+- [x] producers.py: `_wait_until_is_ready()` 메서드 추가 (ready_events + is_ready 루프)
+- [x] SequentialProducer/ParallelProducer: `_wait_until_ready()` → `_wait_until_is_ready()` 교체
+- [x] 테스트: producer 블로킹/해제 동작 검증
+- 의존: M-16
+
+### M-18: Engine state dispatch 배선
+> Engine이 step.set_step_state()용 콜백을 생성하여 각 Step에 주입.
+
+- [x] engine.py: producer_by_name, state_events 맵 구축
+- [x] engine.py: `_make_state_dispatch` 콜백 생성 → 각 step._state_dispatch에 주입
+- [x] engine.py: state_changed_event를 각 producer에 전달
+- [x] 테스트: 엔진 통합 (source → collector + gated filter) 검증
+- [x] 린트/타입 통과
+- 의존: M-17
+
+### M-19: BaseAggStep 제거
+> 실사용 0건인 BaseAggStep 클래스 및 참조 제거.
+
+- [x] base.py에서 BaseAggStep 클래스 삭제 (사용자 수동)
+- [x] __init__.py, dummy_steps.py, test_schema.py, test_init.py에서 참조 제거
+- 의존: 없음
+
+---
+
 ## TODO: 디스크 스필 큐 (이번 범위 밖)
 
 > `maxsize=0` 전환으로 데드락은 해결되지만 대용량 처리 시 OOM 위험이 남는다.

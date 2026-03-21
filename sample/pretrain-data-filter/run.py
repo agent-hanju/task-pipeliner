@@ -9,6 +9,7 @@ from pathlib import Path
 from steps import (
     HashComputeStep,
     HashLookupStep,
+    LoaderStep,
     MinHashComputeStep,
     MinHashLookupStep,
     QualityFilterStep,
@@ -16,7 +17,8 @@ from steps import (
 )
 
 from task_pipeliner.config import StepConfig, load_config
-from task_pipeliner.pipeline import Pipeline
+from task_pipeliner.engine import PipelineEngine, StepRegistry
+from task_pipeliner.stats import StatsCollector
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,14 @@ def main(
 
     # CLI overrides
     for i, step_cfg in enumerate(cfg.pipeline):
+        # Override loader paths from CLI args
+        if step_cfg.type == "loader" and input_paths:
+            cfg.pipeline[i] = StepConfig(  # type: ignore[call-arg,unused-ignore]
+                type="loader",
+                paths=[str(p) for p in input_paths],
+                outputs=step_cfg.outputs,
+            )
+
         # Disable MinHash steps if requested
         if no_minhash and step_cfg.type in ("minhash_compute", "minhash_lookup"):
             cfg.pipeline[i] = StepConfig(  # type: ignore[call-arg,unused-ignore]
@@ -79,20 +89,24 @@ def main(
                 **{k: v for k, v in extra.items() if k != "output_dir"},
             )
 
-    pipeline = Pipeline()
-    pipeline.register_all(
-        {
-            "quality_filter": QualityFilterStep,
-            "hash_compute": HashComputeStep,
-            "hash_lookup": HashLookupStep,
-            "minhash_compute": MinHashComputeStep,
-            "minhash_lookup": MinHashLookupStep,
-            "writer": WriterStep,
-        }
-    )
+    registry = StepRegistry()
+    registry.register("loader", LoaderStep)
+    registry.register("quality_filter", QualityFilterStep)
+    registry.register("hash_compute", HashComputeStep)
+    registry.register("hash_lookup", HashLookupStep)
+    registry.register("minhash_compute", MinHashComputeStep)
+    registry.register("minhash_lookup", MinHashLookupStep)
+    registry.register("writer", WriterStep)
 
-    pipeline.run(config=cfg, inputs=input_paths, output_dir=output_dir)
-    logger.info("pipeline run completed config=%s", config_path)
+    stats = StatsCollector()
+    stats.setup_log_handler(output_dir / "pipeline.log")
+
+    try:
+        engine = PipelineEngine(config=cfg, registry=registry, stats=stats)
+        engine.run(output_dir=output_dir)
+        logger.info("pipeline run completed config=%s", config_path)
+    finally:
+        stats.flush()
 
 
 if __name__ == "__main__":

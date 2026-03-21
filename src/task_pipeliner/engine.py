@@ -252,6 +252,8 @@ class PipelineEngine:
         # Result queues and step producers
         result_queues: dict[str, multiprocessing.Queue[Any]] = {}
         producers: list[SequentialProducer | ParallelProducer] = []
+        producer_by_name: dict[str, SequentialProducer | ParallelProducer] = {}
+        state_events: dict[str, threading.Event] = {}
 
         for step_type in processing_types:
             step = instance_by_type[step_type]
@@ -259,31 +261,61 @@ class PipelineEngine:
             out_qs = output_queues_map[step_type]
             rq: multiprocessing.Queue[Any] = ctx.Queue()
             result_queues[step_type] = rq
+            evt = threading.Event()
+            state_events[step.name] = evt
 
+            p: SequentialProducer | ParallelProducer
             if step.step_type == StepType.PARALLEL:
-                producers.append(
-                    ParallelProducer(
-                        step=step,
-                        input_queue=in_q,
-                        output_queues=out_qs,
-                        stats=self.stats,
-                        result_queue=rq,
-                        state=step.initial_state,
-                        workers=self.config.execution.workers,
-                        chunk_size=self.config.execution.chunk_size,
-                    )
+                p = ParallelProducer(
+                    step=step,
+                    input_queue=in_q,
+                    output_queues=out_qs,
+                    stats=self.stats,
+                    result_queue=rq,
+                    state=step.initial_state,
+                    workers=self.config.execution.workers,
+                    chunk_size=self.config.execution.chunk_size,
+                    state_changed_event=evt,
                 )
             else:
-                producers.append(
-                    SequentialProducer(
-                        step=step,
-                        input_queue=in_q,
-                        output_queues=out_qs,
-                        stats=self.stats,
-                        result_queue=rq,
-                        state=step.initial_state,
-                    )
+                p = SequentialProducer(
+                    step=step,
+                    input_queue=in_q,
+                    output_queues=out_qs,
+                    stats=self.stats,
+                    result_queue=rq,
+                    state=step.initial_state,
+                    state_changed_event=evt,
                 )
+            producers.append(p)
+            producer_by_name[step.name] = p
+
+        # ------------------------------------------------------------------
+        # Wire state dispatch: step.set_step_state(target, state)
+        # ------------------------------------------------------------------
+        def _make_state_dispatch(
+            pmap: dict[str, SequentialProducer | ParallelProducer],
+            emap: dict[str, threading.Event],
+        ) -> Any:
+            def dispatch(target_name: str, state: Any) -> None:
+                target = pmap.get(target_name)
+                if target is None:
+                    raise ValueError(
+                        f"set_step_state target '{target_name}' not found. "
+                        f"Available: {sorted(pmap.keys())}"
+                    )
+                target.state = state
+                target_evt = emap.get(target_name)
+                if target_evt is not None:
+                    target_evt.set()
+                logger.info(
+                    "state dispatched to %s", target_name,
+                )
+            return dispatch
+
+        state_dispatch = _make_state_dispatch(producer_by_name, state_events)
+        for step in instance_by_type.values():
+            step._state_dispatch = state_dispatch
 
         logger.debug("built %d producers", len(producers))
 

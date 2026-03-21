@@ -3,6 +3,12 @@
 # Dedup: compute (PARALLEL) → lookup (SEQUENTIAL) 2-stage split
 
 pipeline:
+  - type: loader
+    paths:
+      - ./data
+    outputs:
+      main: quality_filter
+
   - type: quality_filter
     text_key: text
     filters:

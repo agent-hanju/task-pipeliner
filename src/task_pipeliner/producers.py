@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import multiprocessing
+import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -120,6 +121,7 @@ class BaseProducer(ABC, multiprocessing.Process):
         state: Any = None,
         ready_events: list[Event] | None = None,
         next_state_setter: Callable[[Any], None] | None = None,
+        state_changed_event: threading.Event | None = None,
     ) -> None:
         logger.debug(
             "step=%s output_queues=%d tags",
@@ -135,6 +137,7 @@ class BaseProducer(ABC, multiprocessing.Process):
         self.state = state
         self.ready_events = ready_events
         self.next_state_setter = next_state_setter
+        self.state_changed_event = state_changed_event or threading.Event()
 
     # -- helpers -------------------------------------------------------------
 
@@ -174,6 +177,16 @@ class BaseProducer(ABC, multiprocessing.Process):
             evt.wait()
         logger.debug("all ready events set")
 
+    def _wait_until_is_ready(self) -> None:
+        """Block until ready_events are set AND step.is_ready(state) is True."""
+        self._wait_until_ready()
+        while not self.step.is_ready(self.state):
+            self.stats.set_state(self.step.name, "waiting_for_state")
+            logger.debug("is_ready=False step=%s, waiting", self.step.name)
+            self.state_changed_event.wait(timeout=5)
+            self.state_changed_event.clear()
+        logger.debug("is_ready=True step=%s", self.step.name)
+
     def _send_sentinel(self) -> None:
         """Put a Sentinel into each unique output queue across all tags."""
         sentinel = Sentinel()
@@ -212,7 +225,7 @@ class SequentialProducer(BaseProducer):
         accumulated: BaseResult | None = None
         first_item_recorded = False
         try:
-            self._wait_until_ready()
+            self._wait_until_is_ready()
             emit = self._make_emit()
             self.stats.set_state(self.step.name, "idle")
             logger.info("producer started step=%s", self.step.name)
@@ -379,7 +392,7 @@ class ParallelProducer(BaseProducer):
         first_item_recorded = False
         ctx = multiprocessing.get_context("spawn")
         try:
-            self._wait_until_ready()
+            self._wait_until_is_ready()
             self.stats.set_state(self.step.name, "idle")
             logger.info("producer started step=%s", self.step.name)
 

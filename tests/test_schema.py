@@ -8,7 +8,7 @@ from typing import Any, Self
 
 import pytest
 
-from task_pipeliner.base import BaseAggStep, BaseResult, BaseStep, StepType
+from task_pipeliner.base import BaseResult, BaseStep, StepType
 from task_pipeliner.config import (
     ExecutionConfig,
     PipelineConfig,
@@ -267,19 +267,6 @@ class TestBaseStep:
 
         step = NormalStep()
         step.close()  # should not raise
-
-
-class TestBaseAggStep:
-    def test_cannot_instantiate_directly(self) -> None:
-        with pytest.raises(TypeError):
-            BaseAggStep()  # type: ignore[abstract]
-
-    def test_name_defaults_to_class_name(self) -> None:
-        class MyAgg(BaseAggStep):
-            def process_batch(self, items: list[Any]) -> Any:
-                return items
-
-        assert MyAgg().name == "MyAgg"
 
 
 # ── W-03: config ──────────────────────────────────────────────────

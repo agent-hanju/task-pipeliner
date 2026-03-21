@@ -29,14 +29,6 @@ def main(ctx: click.Context) -> None:
     help="Path to YAML config file.",
 )
 @click.option(
-    "--input",
-    "inputs",
-    multiple=True,
-    required=True,
-    type=click.Path(path_type=Path),
-    help="Input file or directory (repeatable).",
-)
-@click.option(
     "--output",
     "output_dir",
     required=True,
@@ -53,7 +45,6 @@ def main(ctx: click.Context) -> None:
 def run_cmd(
     ctx: click.Context,
     config_path: Path,
-    inputs: tuple[Path, ...],
     output_dir: Path,
     workers: int | None,
 ) -> None:
@@ -67,7 +58,7 @@ def run_cmd(
         cfg = load_config(config_path)
         if workers is not None:
             cfg.execution.workers = workers
-        pipeline.run(config=cfg, inputs=list(inputs), output_dir=output_dir)
+        pipeline.run(config=cfg, output_dir=output_dir)
     except click.ClickException:
         raise
     except Exception as exc:
@@ -75,13 +66,6 @@ def run_cmd(
 
 
 @main.command("batch")
-@click.option(
-    "--config",
-    "config_path",
-    required=True,
-    type=click.Path(exists=True, path_type=Path),
-    help="Path to YAML config file.",
-)
 @click.argument(
     "jobs_file",
     type=click.Path(exists=True, path_type=Path),
@@ -95,11 +79,13 @@ def run_cmd(
 @click.pass_context
 def batch_cmd(
     ctx: click.Context,
-    config_path: Path,
     jobs_file: Path,
     parallel: bool,
 ) -> None:
-    """Run multiple pipeline jobs from a jobs file."""
+    """Run multiple pipeline jobs from a jobs file.
+
+    Each job in the JSON array must have "config" and "output_dir".
+    """
     logging.basicConfig(level=logging.INFO)
     pipeline: Pipeline = ctx.obj["pipeline"]
 
@@ -110,13 +96,11 @@ def batch_cmd(
     try:
         from task_pipeliner.config import load_config
 
-        cfg = load_config(config_path)
-
         for i, job in enumerate(jobs):
-            job_inputs = [Path(p) for p in job["inputs"]]
+            cfg = load_config(Path(job["config"]))
             job_output = Path(job["output_dir"])
             click.echo(f"Job {i + 1}/{len(jobs)}: {job_output}")
-            pipeline.run(config=cfg, inputs=job_inputs, output_dir=job_output)
+            pipeline.run(config=cfg, output_dir=job_output)
 
     except click.ClickException:
         raise

@@ -11,13 +11,14 @@ _CONFIG_PATH = Path(__file__).resolve().parent.parent / "pipeline_config.yaml"
 
 def test_config_loads_successfully() -> None:
     cfg = load_config(_CONFIG_PATH)
-    assert len(cfg.pipeline) == 6
+    assert len(cfg.pipeline) == 7
 
 
 def test_config_step_types() -> None:
     cfg = load_config(_CONFIG_PATH)
     types = [s.type for s in cfg.pipeline]
     assert types == [
+        "loader",
         "quality_filter",
         "hash_compute",
         "hash_lookup",

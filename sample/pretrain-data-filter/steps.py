@@ -8,10 +8,11 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Any, BinaryIO, ClassVar
 
+import orjson
 from datasketch import MinHash, MinHashLSH
 from dedup.normalize import normalize_for_dedup
 from filters.length import filter_length
@@ -19,9 +20,53 @@ from filters.pii import filter_pii
 from filters.repetition import filter_repetition
 from result import FilterResult
 
-from task_pipeliner.base import BaseStep, StepType
+from task_pipeliner.base import BaseResult, BaseStep, StepType
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# SOURCE step — JSONL loader
+# ---------------------------------------------------------------------------
+
+
+class _NullResult(BaseResult):
+    """Minimal no-op result for LoaderStep."""
+
+    def merge(self, other: _NullResult) -> _NullResult:
+        return self
+
+    def write(self, output_dir: Path) -> None:
+        pass
+
+
+class LoaderStep(BaseStep[_NullResult]):
+    """SOURCE step that reads JSONL files."""
+
+    outputs: ClassVar[tuple[str, ...]] = ("main",)
+
+    def __init__(self, paths: list[str] | None = None, **_kwargs: Any) -> None:
+        self._paths = [Path(p) for p in paths] if paths else []
+
+    @property
+    def step_type(self) -> StepType:
+        return StepType.SOURCE
+
+    def items(self) -> Generator[Any, None, None]:
+        logger.info("loading from %d paths", len(self._paths))
+        for p in self._paths:
+            files = sorted(p.glob("*.jsonl")) if p.is_dir() else [p]
+            for f in files:
+                logger.debug("reading %s", f)
+                with open(f, "rb") as fh:
+                    for line in fh:
+                        stripped = line.strip()
+                        if stripped:
+                            yield orjson.loads(stripped)
+
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> _NullResult:
+        raise NotImplementedError("SOURCE step does not process items")
+
 
 # ---------------------------------------------------------------------------
 # Filter registry — maps config key → filter function

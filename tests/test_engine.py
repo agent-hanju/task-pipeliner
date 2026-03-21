@@ -13,6 +13,7 @@ from dummy_steps import (
     FilterEvenStep,
     InitialStateStep,
     PassthroughStep,
+    SlowStep,
     TerminalStep,
 )
 
@@ -452,13 +453,16 @@ class TestSequentialProducerTiming:
         """SEQUENTIAL step has processing_ns > 0 after pipeline run."""
         engine, stats = self._make_engine(
             [
-                StepConfig(type="source", items=list(range(10)), outputs={"main": "terminal"}),
-                StepConfig(type="terminal"),
+                StepConfig(
+                    type="source", items=list(range(3)),
+                    outputs={"main": "slow"},
+                ),
+                StepConfig(type="slow", sleep_seconds=0.01),
             ],
-            {"source": DummySourceStep, "terminal": TerminalStep},
+            {"source": DummySourceStep, "slow": SlowStep},
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["TerminalStep"].processing_ns > 0
+        assert stats._stats["SlowStep"].processing_ns > 0
 
     @pytest.mark.timeout(30)
     def test_sequential_first_item_at(self, tmp_path: Path) -> None:
@@ -475,16 +479,23 @@ class TestSequentialProducerTiming:
 
     @pytest.mark.timeout(30)
     def test_sequential_idle_ns(self, tmp_path: Path) -> None:
-        """SEQUENTIAL step has idle_ns > 0 after pipeline run."""
+        """SEQUENTIAL step has idle_ns > 0 when upstream is slow."""
         engine, stats = self._make_engine(
             [
-                StepConfig(type="source", items=list(range(5)), outputs={"main": "terminal"}),
+                StepConfig(
+                    type="source", items=list(range(3)),
+                    outputs={"main": "slow"},
+                ),
+                StepConfig(
+                    type="slow", sleep_seconds=0.01,
+                    outputs={"main": "terminal"},
+                ),
                 StepConfig(type="terminal"),
             ],
-            {"source": DummySourceStep, "terminal": TerminalStep},
+            {"source": DummySourceStep, "slow": SlowStep, "terminal": TerminalStep},
         )
         engine.run(output_dir=tmp_path / "out")
-        # idle_ns should be > 0 since the step waited for items from the queue
+        # terminal waits for slow upstream → idle_ns > 0
         assert stats._stats["TerminalStep"].idle_ns > 0
 
     @pytest.mark.timeout(30)
@@ -534,13 +545,16 @@ class TestParallelProducerTiming:
         """PARALLEL step has processing_ns > 0 after pipeline run."""
         engine, stats = self._make_engine(
             [
-                StepConfig(type="source", items=list(range(10)), outputs={"main": "passthrough"}),
-                StepConfig(type="passthrough"),
+                StepConfig(
+                    type="source", items=list(range(3)),
+                    outputs={"main": "slow"},
+                ),
+                StepConfig(type="slow", sleep_seconds=0.01),
             ],
-            {"source": DummySourceStep, "passthrough": PassthroughStep},
+            {"source": DummySourceStep, "slow": SlowStep},
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["PassthroughStep"].processing_ns > 0
+        assert stats._stats["SlowStep"].processing_ns > 0
 
     @pytest.mark.timeout(30)
     def test_parallel_first_item_at(self, tmp_path: Path) -> None:

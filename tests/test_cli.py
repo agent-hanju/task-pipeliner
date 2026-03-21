@@ -8,7 +8,7 @@ import orjson
 import pytest
 import yaml
 from click.testing import CliRunner
-from dummy_steps import FilterEvenStep, PassthroughStep
+from dummy_steps import DummyJsonlSourceStep, FilterEvenStep, PassthroughStep
 
 from task_pipeliner.cli import main
 from task_pipeliner.exceptions import StepRegistrationError
@@ -37,23 +37,27 @@ class TestPipeline:
     @pytest.mark.timeout(30)
     def test_run_with_config_path(self, tmp_path: Path) -> None:
         """run() with YAML path loads config and executes pipeline."""
+        input_file = tmp_path / "input.jsonl"
+        input_file.write_bytes(b"\n".join(orjson.dumps({"id": i}) for i in range(5)) + b"\n")
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
             yaml.dump(
                 {
-                    "pipeline": [{"type": "passthrough"}],
+                    "pipeline": [
+                        {"type": "source", "items": [str(input_file)], "outputs": {"main": "passthrough"}},
+                        {"type": "passthrough"},
+                    ],
                     "execution": {"workers": 1, "queue_size": 50, "chunk_size": 20},
                 }
             ),
             encoding="utf-8",
         )
-        input_file = tmp_path / "input.jsonl"
-        input_file.write_bytes(b"\n".join(orjson.dumps({"id": i}) for i in range(5)) + b"\n")
         output_dir = tmp_path / "output"
 
         p = Pipeline()
+        p.register("source", DummyJsonlSourceStep)
         p.register("passthrough", PassthroughStep)
-        p.run(config=config_path, inputs=[input_file], output_dir=output_dir)
+        p.run(config=config_path, output_dir=output_dir)
 
         stats_file = output_dir / "stats.json"
         assert stats_file.exists()
@@ -66,17 +70,22 @@ class TestPipeline:
         """run() with PipelineConfig object directly."""
         from task_pipeliner.config import ExecutionConfig, PipelineConfig, StepConfig
 
-        config = PipelineConfig(
-            pipeline=[StepConfig(type="filter_even")],
-            execution=ExecutionConfig(workers=1, queue_size=50, chunk_size=20),
-        )
         input_file = tmp_path / "input.jsonl"
         input_file.write_bytes(b"\n".join(orjson.dumps(i) for i in range(10)) + b"\n")
+
+        config = PipelineConfig(
+            pipeline=[
+                StepConfig(type="source", items=[str(input_file)], outputs={"main": "filter_even"}),  # type: ignore[call-arg]
+                StepConfig(type="filter_even"),
+            ],
+            execution=ExecutionConfig(workers=1, queue_size=50, chunk_size=20),
+        )
         output_dir = tmp_path / "output"
 
         p = Pipeline()
+        p.register("source", DummyJsonlSourceStep)
         p.register("filter_even", FilterEvenStep)
-        p.run(config=config, inputs=[input_file], output_dir=output_dir)
+        p.run(config=config, output_dir=output_dir)
 
         stats_file = output_dir / "stats.json"
         assert stats_file.exists()
@@ -89,13 +98,11 @@ class TestPipeline:
         from task_pipeliner.config import PipelineConfig, StepConfig
 
         config = PipelineConfig(pipeline=[StepConfig(type="unknown")])
-        input_file = tmp_path / "input.jsonl"
-        input_file.write_bytes(b'{"id": 1}\n')
         output_dir = tmp_path / "output"
 
         p = Pipeline()
         with pytest.raises(StepRegistrationError):
-            p.run(config=config, inputs=[input_file], output_dir=output_dir)
+            p.run(config=config, output_dir=output_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +114,7 @@ class TestRunCommand:
     @staticmethod
     def _pipeline_obj() -> dict[str, Pipeline]:
         p = Pipeline()
+        p.register("source", DummyJsonlSourceStep)
         p.register("passthrough", PassthroughStep)
         p.register("filter_even", FilterEvenStep)
         return {"pipeline": p}
@@ -114,18 +122,21 @@ class TestRunCommand:
     @pytest.mark.timeout(30)
     def test_run_end_to_end(self, tmp_path: Path) -> None:
         """run command → exit_code 0, stats.json exists."""
+        input_file = tmp_path / "input.jsonl"
+        input_file.write_bytes(b"\n".join(orjson.dumps({"id": i}) for i in range(5)) + b"\n")
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
             yaml.dump(
                 {
-                    "pipeline": [{"type": "passthrough"}],
+                    "pipeline": [
+                        {"type": "source", "items": [str(input_file)], "outputs": {"main": "passthrough"}},
+                        {"type": "passthrough"},
+                    ],
                     "execution": {"workers": 1, "queue_size": 50, "chunk_size": 20},
                 }
             ),
             encoding="utf-8",
         )
-        input_file = tmp_path / "input.jsonl"
-        input_file.write_bytes(b"\n".join(orjson.dumps({"id": i}) for i in range(5)) + b"\n")
         output_dir = tmp_path / "output"
 
         runner = CliRunner()
@@ -135,8 +146,6 @@ class TestRunCommand:
                 "run",
                 "--config",
                 str(config_path),
-                "--input",
-                str(input_file),
                 "--output",
                 str(output_dir),
             ],
@@ -168,8 +177,6 @@ class TestRunCommand:
             yaml.dump({"pipeline": [{"type": "nonexistent_step"}]}),
             encoding="utf-8",
         )
-        input_file = tmp_path / "input.jsonl"
-        input_file.write_bytes(b'{"id": 1}\n')
         output_dir = tmp_path / "output"
 
         runner = CliRunner()
@@ -179,8 +186,6 @@ class TestRunCommand:
                 "run",
                 "--config",
                 str(config_path),
-                "--input",
-                str(input_file),
                 "--output",
                 str(output_dir),
             ],
@@ -192,33 +197,37 @@ class TestBatchCommand:
     @staticmethod
     def _pipeline_obj() -> dict[str, Pipeline]:
         p = Pipeline()
+        p.register("source", DummyJsonlSourceStep)
         p.register("passthrough", PassthroughStep)
         return {"pipeline": p}
 
     @pytest.mark.timeout(30)
     def test_batch_sequential(self, tmp_path: Path) -> None:
         """batch command → runs jobs sequentially, each output dir exists."""
-        config_path = tmp_path / "config.yaml"
-        config_path.write_text(
-            yaml.dump(
-                {
-                    "pipeline": [{"type": "passthrough"}],
-                    "execution": {"workers": 1, "queue_size": 50, "chunk_size": 20},
-                }
-            ),
-            encoding="utf-8",
-        )
-
-        # Create two input files
+        # Create two input files and per-job configs
         for i in range(2):
-            (tmp_path / f"input_{i}.jsonl").write_bytes(
+            input_file = tmp_path / f"input_{i}.jsonl"
+            input_file.write_bytes(
                 b"\n".join(orjson.dumps({"id": j}) for j in range(3)) + b"\n"
+            )
+            config_path = tmp_path / f"config_{i}.yaml"
+            config_path.write_text(
+                yaml.dump(
+                    {
+                        "pipeline": [
+                            {"type": "source", "items": [str(input_file)], "outputs": {"main": "passthrough"}},
+                            {"type": "passthrough"},
+                        ],
+                        "execution": {"workers": 1, "queue_size": 50, "chunk_size": 20},
+                    }
+                ),
+                encoding="utf-8",
             )
 
         # Create jobs file
         jobs = [
             {
-                "inputs": [str(tmp_path / f"input_{i}.jsonl")],
+                "config": str(tmp_path / f"config_{i}.yaml"),
                 "output_dir": str(tmp_path / f"out_{i}"),
             }
             for i in range(2)
@@ -231,8 +240,6 @@ class TestBatchCommand:
             main,
             [
                 "batch",
-                "--config",
-                str(config_path),
                 str(jobs_file),
             ],
             obj=self._pipeline_obj(),

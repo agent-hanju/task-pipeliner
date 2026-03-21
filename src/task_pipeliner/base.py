@@ -40,6 +40,17 @@ class BaseStep[R: BaseResult](ABC):
     outputs: ClassVar[tuple[str, ...]] = ()
     """Declared output tags. Empty tuple ``()`` means terminal step (emit not allowed)."""
 
+    _state_dispatch: Callable[[str, Any], None] | None = None
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        state.pop("_state_dispatch", None)
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self._state_dispatch = None
+
     @property
     def name(self) -> str:
         return type(self).__name__
@@ -83,22 +94,32 @@ class BaseStep[R: BaseResult](ABC):
         """SOURCE 스텝 전용. 아이템을 yield한다."""
         raise NotImplementedError("items() must be implemented by SOURCE steps")
 
+    def is_ready(self, state: Any) -> bool:
+        """Return True if this step is ready to process items.
+
+        Override in subclasses to gate processing on state availability.
+        When False, the producer will not call process() even if items
+        are queued — it stays idle until a state change triggers
+        re-evaluation.  Default returns True (always ready).
+        """
+        return True
+
+    def set_step_state(self, target: str, state: Any) -> None:
+        """Set another step's state and fire a state-change event.
+
+        Analogous to emit for items — this method lets a step push
+        state to another step (identified by class name).  The engine
+        injects the dispatch callback before the pipeline runs.
+        """
+        if self._state_dispatch is None:
+            raise RuntimeError(
+                "set_step_state is not available outside pipeline execution"
+            )
+        self._state_dispatch(target, state)
+
     def close(self) -> None:
         """Release resources held by this step.
 
         Called by the Producer after the processing loop finishes.
         Override in subclasses that open files, connections, etc.
         """
-
-
-class BaseAggStep(ABC):
-    """Abstract base for batch/aggregation steps."""
-
-    @property
-    def name(self) -> str:
-        return type(self).__name__
-
-    @abstractmethod
-    def process_batch(self, items: list[Any]) -> Any:
-        """Process a batch of items. Return value becomes next stage state."""
-        ...
