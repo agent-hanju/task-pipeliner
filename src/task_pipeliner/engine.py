@@ -19,6 +19,7 @@ from task_pipeliner.producers import (
     Sentinel,
     SequentialProducer,
 )
+from task_pipeliner.progress import ProgressReporter
 from task_pipeliner.stats import StatsCollector
 
 logger = logging.getLogger(__name__)
@@ -184,8 +185,6 @@ class PipelineEngine:
         # ------------------------------------------------------------------
         # Build DAG queue topology from config outputs
         # ------------------------------------------------------------------
-        queue_size = self.config.execution.queue_size
-
         # output_queues_map: step_type → {tag → [queues]}
         output_queues_map: dict[str, dict[str, list[multiprocessing.Queue[Any]]]] = {
             t: {} for t in instance_by_type
@@ -209,7 +208,7 @@ class PipelineEngine:
                             target_type,
                         )
                         continue
-                    q: multiprocessing.Queue[Any] = ctx.Queue(maxsize=queue_size)
+                    q: multiprocessing.Queue[Any] = ctx.Queue()
                     output_queues_map[step_cfg.type].setdefault(tag, []).append(q)
                     input_queues_map[target_type].append(q)
                     all_queues.append(q)
@@ -225,7 +224,7 @@ class PipelineEngine:
             in_queues = input_queues_map.get(step_type, [])
             if len(in_queues) == 0:
                 # No upstream — create queue with immediate sentinel
-                q = ctx.Queue(maxsize=queue_size)
+                q = ctx.Queue()
                 q.put(Sentinel())
                 merged_input[step_type] = q
                 all_queues.append(q)
@@ -233,7 +232,7 @@ class PipelineEngine:
                 merged_input[step_type] = in_queues[0]
             else:
                 # Fan-in: merge multiple input queues
-                merged_q: multiprocessing.Queue[Any] = ctx.Queue(maxsize=queue_size)
+                merged_q: multiprocessing.Queue[Any] = ctx.Queue()
                 threads = _start_queue_merger(in_queues, merged_q)
                 merger_threads.extend(threads)
                 merged_input[step_type] = merged_q
@@ -269,6 +268,7 @@ class PipelineEngine:
                         output_queues=out_qs,
                         stats=self.stats,
                         result_queue=rq,
+                        state=step.initial_state,
                         workers=self.config.execution.workers,
                         chunk_size=self.config.execution.chunk_size,
                     )
@@ -281,6 +281,7 @@ class PipelineEngine:
                         output_queues=out_qs,
                         stats=self.stats,
                         result_queue=rq,
+                        state=step.initial_state,
                     )
                 )
 
@@ -289,6 +290,7 @@ class PipelineEngine:
         # ------------------------------------------------------------------
         # Run pipeline
         # ------------------------------------------------------------------
+        step_names = [instance_by_type[cfg.type].name for cfg in enabled_cfgs]
         feeder = threading.Thread(target=input_producer.run, daemon=True)
         producer_threads = [threading.Thread(target=p.run, daemon=True) for p in producers]
 
@@ -302,10 +304,25 @@ class PipelineEngine:
             logger.error("signal %d received — initiating shutdown", signum)
             shutdown_event.set()
 
+        # Suppress console propagation during execution
+        parent_logger = logging.getLogger("task_pipeliner")
+        original_propagate = parent_logger.propagate
+
+        reporter = ProgressReporter(
+            stats=self.stats,
+            step_names=step_names,
+            output_dir=output_dir,
+        )
+
         try:
+            parent_logger.propagate = False
+
             signal.signal(signal.SIGINT, _signal_handler)
             if hasattr(signal, "SIGBREAK"):
                 signal.signal(signal.SIGBREAK, _signal_handler)
+
+            output_dir.mkdir(parents=True, exist_ok=True)
+            reporter.start()
 
             feeder.start()
             for t in producer_threads:
@@ -332,6 +349,9 @@ class PipelineEngine:
                     logger.warning("producer thread still alive after join timeout")
 
         finally:
+            reporter.stop()
+            parent_logger.propagate = original_propagate
+
             signal.signal(signal.SIGINT, original_sigint)
             if hasattr(signal, "SIGBREAK") and original_sigbreak is not None:
                 signal.signal(signal.SIGBREAK, original_sigbreak)

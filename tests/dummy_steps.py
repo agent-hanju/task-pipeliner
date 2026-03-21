@@ -193,3 +193,24 @@ class StateAwareStep(BaseStep[NullResult]):
     ) -> NullResult:
         emit(state["multiplier"] * item, "main")
         return NullResult()
+
+
+class InitialStateStep(BaseStep[NullResult]):
+    """SEQUENTIAL step that provides initial_state and mutates it during process()."""
+
+    outputs = ("main",)
+
+    @property
+    def step_type(self) -> StepType:
+        return StepType.SEQUENTIAL
+
+    @property
+    def initial_state(self) -> dict[str, int]:
+        return {"count": 0}
+
+    def process(
+        self, item: Any, state: dict[str, int], emit: Callable[[Any, str], None]
+    ) -> NullResult:
+        state["count"] += 1
+        emit({"item": item, "count": state["count"]}, "main")
+        return NullResult()

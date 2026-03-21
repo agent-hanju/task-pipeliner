@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import orjson
@@ -10,6 +11,7 @@ from dummy_steps import (
     BranchEvenOddStep,
     DummySourceStep,
     FilterEvenStep,
+    InitialStateStep,
     PassthroughStep,
     TerminalStep,
 )
@@ -371,3 +373,325 @@ class TestPipelineEngineDAG:
         engine.run(output_dir=tmp_path / "out")
         assert stats._stats["PassthroughStep"].processed == 5
         assert stats._stats["PassthroughStep"].emitted == {}
+
+
+# ---------------------------------------------------------------------------
+# M-03: initial_state integration
+# ---------------------------------------------------------------------------
+
+
+class TestInitialStateIntegration:
+    def _make_engine(
+        self,
+        steps: list[StepConfig],
+        registry_map: dict[str, type],
+        *,
+        workers: int = 1,
+        queue_size: int = 0,
+        chunk_size: int = 50,
+    ) -> tuple[PipelineEngine, StatsCollector]:
+        config = PipelineConfig(
+            pipeline=steps,
+            execution=ExecutionConfig(
+                workers=workers, queue_size=queue_size, chunk_size=chunk_size
+            ),
+        )
+        registry = StepRegistry()
+        for name, cls in registry_map.items():
+            registry.register(name, cls)
+        stats = StatsCollector()
+        engine = PipelineEngine(config=config, registry=registry, stats=stats)
+        return engine, stats
+
+    @pytest.mark.timeout(30)
+    def test_initial_state_passed_to_sequential_producer(self, tmp_path: Path) -> None:
+        """InitialStateStep provides initial_state={'count': 0}, mutates during process()."""
+        engine, stats = self._make_engine(
+            [
+                StepConfig(
+                    type="source", items=list(range(5)), outputs={"main": "stateful"}
+                ),
+                StepConfig(type="stateful"),
+            ],
+            {"source": DummySourceStep, "stateful": InitialStateStep},
+        )
+        engine.run(output_dir=tmp_path / "out")
+        assert stats._stats["InitialStateStep"].processed == 5
+
+
+# ---------------------------------------------------------------------------
+# M-06: SequentialProducer timing instrumentation
+# ---------------------------------------------------------------------------
+
+
+class TestSequentialProducerTiming:
+    def _make_engine(
+        self,
+        steps: list[StepConfig],
+        registry_map: dict[str, type],
+        *,
+        workers: int = 1,
+        queue_size: int = 0,
+        chunk_size: int = 50,
+    ) -> tuple[PipelineEngine, StatsCollector]:
+        config = PipelineConfig(
+            pipeline=steps,
+            execution=ExecutionConfig(
+                workers=workers, queue_size=queue_size, chunk_size=chunk_size
+            ),
+        )
+        registry = StepRegistry()
+        for name, cls in registry_map.items():
+            registry.register(name, cls)
+        stats = StatsCollector()
+        engine = PipelineEngine(config=config, registry=registry, stats=stats)
+        return engine, stats
+
+    @pytest.mark.timeout(30)
+    def test_sequential_processing_ns(self, tmp_path: Path) -> None:
+        """SEQUENTIAL step has processing_ns > 0 after pipeline run."""
+        engine, stats = self._make_engine(
+            [
+                StepConfig(type="source", items=list(range(10)), outputs={"main": "terminal"}),
+                StepConfig(type="terminal"),
+            ],
+            {"source": DummySourceStep, "terminal": TerminalStep},
+        )
+        engine.run(output_dir=tmp_path / "out")
+        assert stats._stats["TerminalStep"].processing_ns > 0
+
+    @pytest.mark.timeout(30)
+    def test_sequential_first_item_at(self, tmp_path: Path) -> None:
+        """SEQUENTIAL step has first_item_at set after pipeline run."""
+        engine, stats = self._make_engine(
+            [
+                StepConfig(type="source", items=list(range(5)), outputs={"main": "terminal"}),
+                StepConfig(type="terminal"),
+            ],
+            {"source": DummySourceStep, "terminal": TerminalStep},
+        )
+        engine.run(output_dir=tmp_path / "out")
+        assert stats._stats["TerminalStep"].first_item_at is not None
+
+    @pytest.mark.timeout(30)
+    def test_sequential_idle_ns(self, tmp_path: Path) -> None:
+        """SEQUENTIAL step has idle_ns > 0 after pipeline run."""
+        engine, stats = self._make_engine(
+            [
+                StepConfig(type="source", items=list(range(5)), outputs={"main": "terminal"}),
+                StepConfig(type="terminal"),
+            ],
+            {"source": DummySourceStep, "terminal": TerminalStep},
+        )
+        engine.run(output_dir=tmp_path / "out")
+        # idle_ns should be > 0 since the step waited for items from the queue
+        assert stats._stats["TerminalStep"].idle_ns > 0
+
+    @pytest.mark.timeout(30)
+    def test_sequential_current_state_done(self, tmp_path: Path) -> None:
+        """SEQUENTIAL step has current_state == 'done' after pipeline run."""
+        engine, stats = self._make_engine(
+            [
+                StepConfig(type="source", items=list(range(5)), outputs={"main": "terminal"}),
+                StepConfig(type="terminal"),
+            ],
+            {"source": DummySourceStep, "terminal": TerminalStep},
+        )
+        engine.run(output_dir=tmp_path / "out")
+        assert stats._stats["TerminalStep"].current_state == "done"
+
+
+# ---------------------------------------------------------------------------
+# M-07: ParallelProducer timing instrumentation
+# ---------------------------------------------------------------------------
+
+
+class TestParallelProducerTiming:
+    def _make_engine(
+        self,
+        steps: list[StepConfig],
+        registry_map: dict[str, type],
+        *,
+        workers: int = 2,
+        queue_size: int = 0,
+        chunk_size: int = 3,
+    ) -> tuple[PipelineEngine, StatsCollector]:
+        config = PipelineConfig(
+            pipeline=steps,
+            execution=ExecutionConfig(
+                workers=workers, queue_size=queue_size, chunk_size=chunk_size
+            ),
+        )
+        registry = StepRegistry()
+        for name, cls in registry_map.items():
+            registry.register(name, cls)
+        stats = StatsCollector()
+        engine = PipelineEngine(config=config, registry=registry, stats=stats)
+        return engine, stats
+
+    @pytest.mark.timeout(30)
+    def test_parallel_processing_ns(self, tmp_path: Path) -> None:
+        """PARALLEL step has processing_ns > 0 after pipeline run."""
+        engine, stats = self._make_engine(
+            [
+                StepConfig(type="source", items=list(range(10)), outputs={"main": "passthrough"}),
+                StepConfig(type="passthrough"),
+            ],
+            {"source": DummySourceStep, "passthrough": PassthroughStep},
+        )
+        engine.run(output_dir=tmp_path / "out")
+        assert stats._stats["PassthroughStep"].processing_ns > 0
+
+    @pytest.mark.timeout(30)
+    def test_parallel_first_item_at(self, tmp_path: Path) -> None:
+        """PARALLEL step has first_item_at set after pipeline run."""
+        engine, stats = self._make_engine(
+            [
+                StepConfig(type="source", items=list(range(5)), outputs={"main": "passthrough"}),
+                StepConfig(type="passthrough"),
+            ],
+            {"source": DummySourceStep, "passthrough": PassthroughStep},
+        )
+        engine.run(output_dir=tmp_path / "out")
+        assert stats._stats["PassthroughStep"].first_item_at is not None
+
+    @pytest.mark.timeout(30)
+    def test_parallel_current_state_done(self, tmp_path: Path) -> None:
+        """PARALLEL step has current_state == 'done' after pipeline run."""
+        engine, stats = self._make_engine(
+            [
+                StepConfig(type="source", items=list(range(5)), outputs={"main": "passthrough"}),
+                StepConfig(type="passthrough"),
+            ],
+            {"source": DummySourceStep, "passthrough": PassthroughStep},
+        )
+        engine.run(output_dir=tmp_path / "out")
+        assert stats._stats["PassthroughStep"].current_state == "done"
+
+    @pytest.mark.timeout(30)
+    def test_parallel_regression_all_items(self, tmp_path: Path) -> None:
+        """All items still processed correctly with interleaved collection."""
+        engine, stats = self._make_engine(
+            [
+                StepConfig(
+                    type="source", items=list(range(20)), outputs={"main": "filter_even"}
+                ),
+                StepConfig(type="filter_even"),
+            ],
+            {"source": DummySourceStep, "filter_even": FilterEvenStep},
+        )
+        engine.run(output_dir=tmp_path / "out")
+        assert stats._stats["FilterEvenStep"].processed == 20
+
+
+# ---------------------------------------------------------------------------
+# M-08: InputProducer instrumentation
+# ---------------------------------------------------------------------------
+
+
+class TestInputProducerTiming:
+    def _make_engine(
+        self,
+        steps: list[StepConfig],
+        registry_map: dict[str, type],
+        *,
+        workers: int = 1,
+        queue_size: int = 0,
+        chunk_size: int = 50,
+    ) -> tuple[PipelineEngine, StatsCollector]:
+        config = PipelineConfig(
+            pipeline=steps,
+            execution=ExecutionConfig(
+                workers=workers, queue_size=queue_size, chunk_size=chunk_size
+            ),
+        )
+        registry = StepRegistry()
+        for name, cls in registry_map.items():
+            registry.register(name, cls)
+        stats = StatsCollector()
+        engine = PipelineEngine(config=config, registry=registry, stats=stats)
+        return engine, stats
+
+    @pytest.mark.timeout(30)
+    def test_source_current_state_done(self, tmp_path: Path) -> None:
+        """SOURCE step has current_state == 'done' after pipeline run."""
+        engine, stats = self._make_engine(
+            [
+                StepConfig(type="source", items=list(range(5)), outputs={"main": "terminal"}),
+                StepConfig(type="terminal"),
+            ],
+            {"source": DummySourceStep, "terminal": TerminalStep},
+        )
+        engine.run(output_dir=tmp_path / "out")
+        assert stats._stats["DummySourceStep"].current_state == "done"
+
+    @pytest.mark.timeout(30)
+    def test_source_first_item_at(self, tmp_path: Path) -> None:
+        """SOURCE step has first_item_at set after pipeline run."""
+        engine, stats = self._make_engine(
+            [
+                StepConfig(type="source", items=list(range(5)), outputs={"main": "terminal"}),
+                StepConfig(type="terminal"),
+            ],
+            {"source": DummySourceStep, "terminal": TerminalStep},
+        )
+        engine.run(output_dir=tmp_path / "out")
+        assert stats._stats["DummySourceStep"].first_item_at is not None
+
+
+# ---------------------------------------------------------------------------
+# M-11: Engine integration + log separation
+# ---------------------------------------------------------------------------
+
+
+class TestEngineProgressIntegration:
+    def _make_engine(
+        self,
+        steps: list[StepConfig],
+        registry_map: dict[str, type],
+        *,
+        workers: int = 1,
+        queue_size: int = 0,
+        chunk_size: int = 50,
+    ) -> tuple[PipelineEngine, StatsCollector]:
+        config = PipelineConfig(
+            pipeline=steps,
+            execution=ExecutionConfig(
+                workers=workers, queue_size=queue_size, chunk_size=chunk_size
+            ),
+        )
+        registry = StepRegistry()
+        for name, cls in registry_map.items():
+            registry.register(name, cls)
+        stats = StatsCollector()
+        engine = PipelineEngine(config=config, registry=registry, stats=stats)
+        return engine, stats
+
+    @pytest.mark.timeout(30)
+    def test_progress_log_created(self, tmp_path: Path) -> None:
+        """progress.log file is created in output_dir during pipeline run."""
+        engine, stats = self._make_engine(
+            [
+                StepConfig(type="source", items=list(range(5)), outputs={"main": "terminal"}),
+                StepConfig(type="terminal"),
+            ],
+            {"source": DummySourceStep, "terminal": TerminalStep},
+        )
+        output_dir = tmp_path / "out"
+        engine.run(output_dir=output_dir)
+        assert (output_dir / "progress.log").exists()
+
+    @pytest.mark.timeout(30)
+    def test_propagate_restored_after_run(self, tmp_path: Path) -> None:
+        """task_pipeliner logger propagate is restored after pipeline run."""
+        parent_logger = logging.getLogger("task_pipeliner")
+        original_propagate = parent_logger.propagate
+        engine, stats = self._make_engine(
+            [
+                StepConfig(type="source", items=list(range(3)), outputs={"main": "terminal"}),
+                StepConfig(type="terminal"),
+            ],
+            {"source": DummySourceStep, "terminal": TerminalStep},
+        )
+        engine.run(output_dir=tmp_path / "out")
+        assert parent_logger.propagate == original_propagate

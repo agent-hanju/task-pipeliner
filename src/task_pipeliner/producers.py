@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import multiprocessing
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -65,8 +66,14 @@ class InputProducer:
     def run(self) -> None:
         """Iterate step.items() into output queues, then send sentinel."""
         logger.info("input producer started step=%s", self._step.name)
+        first_item_recorded = False
         try:
+            if self._stats is not None:
+                self._stats.set_state(self._step.name, "processing")
             for item in self._step.items():
+                if not first_item_recorded and self._stats is not None:
+                    self._stats.record_first_item(self._step.name)
+                    first_item_recorded = True
                 for tag, tag_queues in self._output_queues.items():
                     for q in tag_queues:
                         q.put(item)
@@ -85,6 +92,7 @@ class InputProducer:
                         q.put(sentinel)
                         seen.add(qid)
             if self._stats is not None:
+                self._stats.set_state(self._step.name, "done")
                 self._stats.finish(self._step.name)
             logger.info("input producer finished step=%s", self._step.name)
 
@@ -202,17 +210,35 @@ class SequentialProducer(BaseProducer):
     def run(self) -> None:
         logger.debug("run started step=%s", self.step.name)
         accumulated: BaseResult | None = None
+        first_item_recorded = False
         try:
             self._wait_until_ready()
             emit = self._make_emit()
+            self.stats.set_state(self.step.name, "idle")
             logger.info("producer started step=%s", self.step.name)
             while True:
-                item = self.input_queue.get()
+                if self.input_queue.empty():
+                    idle_start = time.monotonic_ns()
+                    item = self.input_queue.get()
+                    idle_ns = time.monotonic_ns() - idle_start
+                    self.stats.add_idle_ns(self.step.name, idle_ns)
+                else:
+                    item = self.input_queue.get()
+
                 if is_sentinel(item):
                     logger.info("sentinel received step=%s", self.step.name)
                     break
+
+                if not first_item_recorded:
+                    self.stats.record_first_item(self.step.name)
+                    first_item_recorded = True
+
+                self.stats.set_state(self.step.name, "processing")
                 try:
+                    proc_start = time.monotonic_ns()
                     result = self.step.process(item, self.state, emit)
+                    proc_ns = time.monotonic_ns() - proc_start
+                    self.stats.add_processing_ns(self.step.name, proc_ns)
                     accumulated = result if accumulated is None else accumulated.merge(result)
                     self.stats.increment(self.step.name, "processed")
                 except Exception:
@@ -223,10 +249,12 @@ class SequentialProducer(BaseProducer):
                         repr(item)[:200],
                         exc_info=True,
                     )
+                self.stats.set_state(self.step.name, "idle")
         finally:
             self.step.close()
             if accumulated is not None:
                 self._publish_result(accumulated)
+            self.stats.set_state(self.step.name, "done")
             self.stats.finish(self.step.name)
             if self.next_state_setter is not None:
                 self.next_state_setter(self.state)
@@ -251,19 +279,20 @@ def _parallel_worker(
     chunk: list[Any],
     step: BaseStep[Any],
     state: Any,
-) -> tuple[BaseResult | None, int, int, dict[str, int]]:
+) -> tuple[BaseResult | None, int, int, dict[str, int], int]:
     """Process a chunk of items in a worker process.
 
     Items are collected locally during processing, then put into
     output queues in bulk after the chunk is done — reduces lock
     contention compared to per-item put.
 
-    Returns (accumulated_result, processed_count, errored_count, emitted_by_tag).
+    Returns (accumulated_result, processed_count, errored_count, emitted_by_tag, processing_ns).
     """
     accumulated: BaseResult | None = None
     emitted: list[tuple[Any, str]] = []
     processed = 0
     errored = 0
+    total_processing_ns = 0
     step_outputs = step.outputs
 
     def _buffer_emit(item: Any, tag: str) -> None:
@@ -273,7 +302,9 @@ def _parallel_worker(
 
     for item in chunk:
         try:
+            t0 = time.monotonic_ns()
             result = step.process(item, state, _buffer_emit)
+            total_processing_ns += time.monotonic_ns() - t0
             accumulated = result if accumulated is None else accumulated.merge(result)
             processed += 1
         except Exception:
@@ -296,7 +327,7 @@ def _parallel_worker(
             q.put(out_item)
         emitted_by_tag[tag] = emitted_by_tag.get(tag, 0) + 1
 
-    return accumulated, processed, errored, emitted_by_tag
+    return accumulated, processed, errored, emitted_by_tag, total_processing_ns
 
 
 # ---------------------------------------------------------------------------
@@ -318,12 +349,38 @@ class ParallelProducer(BaseProducer):
         self.workers = workers
         self.chunk_size = chunk_size
 
+    def _collect_completed(
+        self,
+        futures: list[Any],
+        accumulated: BaseResult | None,
+    ) -> tuple[list[Any], BaseResult | None]:
+        """Collect results from completed futures, updating stats incrementally."""
+        remaining = []
+        for f in futures:
+            if f.done():
+                chunk_result, processed, errored, emitted_by_tag, proc_ns = f.result()
+                self.stats.increment(self.step.name, "processed", processed)
+                self.stats.add_processing_ns(self.step.name, proc_ns)
+                if errored:
+                    self.stats.increment(self.step.name, "errored", errored)
+                for tag, count in emitted_by_tag.items():
+                    self.stats.increment_emitted(self.step.name, tag, count)
+                if chunk_result is not None:
+                    accumulated = (
+                        chunk_result if accumulated is None else accumulated.merge(chunk_result)
+                    )
+            else:
+                remaining.append(f)
+        return remaining, accumulated
+
     def run(self) -> None:
         logger.debug("run started step=%s workers=%d", self.step.name, self.workers)
         accumulated: BaseResult | None = None
+        first_item_recorded = False
         ctx = multiprocessing.get_context("spawn")
         try:
             self._wait_until_ready()
+            self.stats.set_state(self.step.name, "idle")
             logger.info("producer started step=%s", self.step.name)
 
             executor = ProcessPoolExecutor(
@@ -334,10 +391,17 @@ class ParallelProducer(BaseProducer):
             )
             try:
                 chunk: list[Any] = []
-                futures = []
+                futures: list[Any] = []
 
                 while True:
-                    item = self.input_queue.get()
+                    if self.input_queue.empty():
+                        idle_start = time.monotonic_ns()
+                        item = self.input_queue.get()
+                        idle_ns = time.monotonic_ns() - idle_start
+                        self.stats.add_idle_ns(self.step.name, idle_ns)
+                    else:
+                        item = self.input_queue.get()
+
                     if is_sentinel(item):
                         logger.info("sentinel received step=%s", self.step.name)
                         # Flush remaining chunk
@@ -353,6 +417,11 @@ class ParallelProducer(BaseProducer):
                             )
                         break
 
+                    if not first_item_recorded:
+                        self.stats.record_first_item(self.step.name)
+                        first_item_recorded = True
+
+                    self.stats.set_state(self.step.name, "processing")
                     chunk.append(item)
                     if len(chunk) >= self.chunk_size:
                         logger.debug("submitting chunk size=%d", len(chunk))
@@ -365,18 +434,23 @@ class ParallelProducer(BaseProducer):
                             )
                         )
                         chunk = []
+                        # Interleave: collect completed futures between chunk submissions
+                        futures, accumulated = self._collect_completed(futures, accumulated)
 
-                # Collect results
+                # Collect remaining results
                 for future in as_completed(futures):
-                    chunk_result, processed, errored, emitted_by_tag = future.result()
+                    chunk_result, processed, errored, emitted_by_tag, proc_ns = future.result()
                     self.stats.increment(self.step.name, "processed", processed)
+                    self.stats.add_processing_ns(self.step.name, proc_ns)
                     if errored:
                         self.stats.increment(self.step.name, "errored", errored)
                     for tag, count in emitted_by_tag.items():
                         self.stats.increment_emitted(self.step.name, tag, count)
                     if chunk_result is not None:
                         accumulated = (
-                            chunk_result if accumulated is None else accumulated.merge(chunk_result)
+                            chunk_result
+                            if accumulated is None
+                            else accumulated.merge(chunk_result)
                         )
             finally:
                 executor.shutdown(wait=True)
@@ -384,6 +458,7 @@ class ParallelProducer(BaseProducer):
             self.step.close()
             if accumulated is not None:
                 self._publish_result(accumulated)
+            self.stats.set_state(self.step.name, "done")
             self.stats.finish(self.step.name)
             if self.next_state_setter is not None:
                 self.next_state_setter(self.state)

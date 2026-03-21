@@ -1,0 +1,9 @@
+--- Pipeline Progress (3.7s) --------------------------------------------
+  JsonlSourceStep                                 372 in → 372 main  [done]
+  QualityFilterStep        372 in → 336 kept, 36 removed  0.5ms/item  [done]
+  HashComputeStep                     336 in → 336 main  0.1ms/item  [done]
+  HashLookupStep                      336 in → 336 kept  0.0ms/item  [done]
+  MinHashComputeStep                  336 in → 336 main  3.7ms/item  [done]
+  MinHashLookupStep        336 in → 329 kept, 7 removed  0.1ms/item  [done]
+  WriterStep                               372 produced  0.3ms/item  [done]
+-------------------------------------------------------------------------

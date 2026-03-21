@@ -132,23 +132,26 @@ class HashLookupStep(BaseStep[FilterResult]):
 
     outputs: ClassVar[tuple[str, ...]] = ("kept", "removed")
 
-    def __init__(self, **_kwargs: Any) -> None:
-        self._seen: set[str] = set()
-
     @property
     def step_type(self) -> StepType:
         return StepType.SEQUENTIAL
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> FilterResult:
+    @property
+    def initial_state(self) -> set[str]:
+        return set()
+
+    def process(
+        self, item: Any, state: set[str], emit: Callable[[Any, str], None]
+    ) -> FilterResult:
         hash_value: str = item["_dedup_hash"]
         logger.debug("hash=%s", hash_value[:16])
 
-        if hash_value in self._seen:
+        if hash_value in state:
             item["_removed_reason"] = "dedup/exact"
             emit(item, "removed")
             return FilterResult(removed=1, removed_reasons={"dedup/exact": 1})
 
-        self._seen.add(hash_value)
+        state.add(hash_value)
         del item["_dedup_hash"]
         emit(item, "kept")
         return FilterResult(kept=1)
@@ -220,6 +223,8 @@ class MinHashLookupStep(BaseStep[FilterResult]):
         num_perm: int = 128,
         **_kwargs: Any,
     ) -> None:
+        self._threshold = threshold
+        self._num_perm = num_perm
         self._lsh = MinHashLSH(threshold=threshold, num_perm=num_perm)
         self._counter = 0
 
@@ -227,7 +232,12 @@ class MinHashLookupStep(BaseStep[FilterResult]):
     def step_type(self) -> StepType:
         return StepType.SEQUENTIAL
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> FilterResult:
+    def process(
+        self,
+        item: Any,
+        state: Any,
+        emit: Callable[[Any, str], None],
+    ) -> FilterResult:
         mh: MinHash = item["_minhash"]
         logger.debug("counter=%d", self._counter)
 

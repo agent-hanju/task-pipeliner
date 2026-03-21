@@ -1,65 +1,107 @@
 [
   {
-    "elapsed_seconds": 0.0347,
+    "current_state": "done",
+    "elapsed_seconds": 0.0426,
     "emitted": {
       "main": 372
     },
     "errored": 0,
+    "idle_avg_ms": null,
+    "idle_seconds": 0.0,
+    "initial_wait_seconds": 0.0121,
     "processed": 372,
+    "processing_avg_ms": 0.0,
+    "processing_seconds": 0.0,
     "step_name": "JsonlSourceStep"
   },
   {
-    "elapsed_seconds": 1.0436,
+    "current_state": "done",
+    "elapsed_seconds": 1.5021,
     "emitted": {
       "kept": 336,
       "removed": 36
     },
     "errored": 0,
+    "idle_avg_ms": 0.5633,
+    "idle_seconds": 0.0045,
+    "initial_wait_seconds": 0.0128,
     "processed": 372,
+    "processing_avg_ms": 0.5091,
+    "processing_seconds": 0.1894,
     "step_name": "QualityFilterStep"
   },
   {
-    "elapsed_seconds": 1.9678,
+    "current_state": "done",
+    "elapsed_seconds": 2.5946,
     "emitted": {
       "main": 336
     },
     "errored": 0,
+    "idle_avg_ms": 121.8276,
+    "idle_seconds": 1.4619,
+    "initial_wait_seconds": 0.9016,
     "processed": 336,
+    "processing_avg_ms": 0.1382,
+    "processing_seconds": 0.0464,
     "step_name": "HashComputeStep"
   },
   {
-    "elapsed_seconds": 1.9686,
+    "current_state": "done",
+    "elapsed_seconds": 2.596,
     "emitted": {
       "kept": 336
     },
     "errored": 0,
+    "idle_avg_ms": 843.6681,
+    "idle_seconds": 2.531,
+    "initial_wait_seconds": 1.924,
     "processed": 336,
+    "processing_avg_ms": 0.0337,
+    "processing_seconds": 0.0113,
     "step_name": "HashLookupStep"
   },
   {
-    "elapsed_seconds": 2.9213,
+    "current_state": "done",
+    "elapsed_seconds": 3.6797,
     "emitted": {
       "main": 336
     },
     "errored": 0,
+    "idle_avg_ms": 103.9089,
+    "idle_seconds": 2.4938,
+    "initial_wait_seconds": 1.9336,
     "processed": 336,
+    "processing_avg_ms": 3.7182,
+    "processing_seconds": 1.2493,
     "step_name": "MinHashComputeStep"
   },
   {
-    "elapsed_seconds": 2.9222,
+    "current_state": "done",
+    "elapsed_seconds": 3.681,
     "emitted": {
       "kept": 329,
       "removed": 7
     },
     "errored": 0,
+    "idle_avg_ms": 217.3861,
+    "idle_seconds": 3.4782,
+    "initial_wait_seconds": 3.2601,
     "processed": 336,
+    "processing_avg_ms": 0.1018,
+    "processing_seconds": 0.0342,
     "step_name": "MinHashLookupStep"
   },
   {
-    "elapsed_seconds": 2.9236,
+    "current_state": "done",
+    "elapsed_seconds": 3.6862,
     "emitted": {},
     "errored": 0,
+    "idle_avg_ms": 112.1227,
+    "idle_seconds": 3.4758,
+    "initial_wait_seconds": 0.921,
     "processed": 372,
+    "processing_avg_ms": 0.315,
+    "processing_seconds": 0.1172,
     "step_name": "WriterStep"
   }
 ]

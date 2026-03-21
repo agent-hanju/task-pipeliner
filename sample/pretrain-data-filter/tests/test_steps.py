@@ -137,11 +137,12 @@ class TestHashLookupStep:
         from steps import HashLookupStep
 
         step = HashLookupStep()
+        state = step.initial_state
         c1, c2 = _Collector(), _Collector()
         item1 = {"id": "a", "text": "hello", "_dedup_hash": "abc123"}
         item2 = {"id": "b", "text": "world", "_dedup_hash": "abc123"}
-        r1 = step.process(item1, None, c1)
-        r2 = step.process(item2, None, c2)
+        r1 = step.process(item1, state, c1)
+        r2 = step.process(item2, state, c2)
         assert c1.items[0][1] == "kept"
         assert r1.kept == 1
         assert c2.items[0][1] == "removed"
@@ -152,9 +153,10 @@ class TestHashLookupStep:
         from steps import HashLookupStep
 
         step = HashLookupStep()
+        state = step.initial_state
         c1, c2 = _Collector(), _Collector()
-        step.process({"id": "a", "text": "x", "_dedup_hash": "hash1"}, None, c1)
-        step.process({"id": "b", "text": "y", "_dedup_hash": "hash2"}, None, c2)
+        step.process({"id": "a", "text": "x", "_dedup_hash": "hash1"}, state, c1)
+        step.process({"id": "b", "text": "y", "_dedup_hash": "hash2"}, state, c2)
         assert c1.items[0][1] == "kept"
         assert c2.items[0][1] == "kept"
 
@@ -163,9 +165,18 @@ class TestHashLookupStep:
         from steps import HashLookupStep
 
         step = HashLookupStep()
+        state = step.initial_state
         collector = _Collector()
-        step.process({"id": "a", "text": "x", "_dedup_hash": "h1"}, None, collector)
+        step.process({"id": "a", "text": "x", "_dedup_hash": "h1"}, state, collector)
         assert "_dedup_hash" not in collector.items[0][0]
+
+    def test_initial_state_returns_empty_set(self) -> None:
+        from steps import HashLookupStep
+
+        step = HashLookupStep()
+        state = step.initial_state
+        assert isinstance(state, set)
+        assert len(state) == 0
 
 
 # ---------------------------------------------------------------------------

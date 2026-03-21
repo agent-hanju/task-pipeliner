@@ -86,6 +86,26 @@ class JsonlWriter:
         self.close()
 
 
+def count_jsonl_lines(paths: list[Path]) -> int:
+    """Count total lines across JSONL files (binary mode for speed).
+
+    Directories are expanded to ``*.jsonl`` files.
+    """
+    logger.debug("paths=%s", paths)
+    total = 0
+    resolved: list[Path] = []
+    for p in paths:
+        if p.is_dir():
+            resolved.extend(sorted(p.glob("*.jsonl")))
+        else:
+            resolved.append(p)
+    for fpath in resolved:
+        with open(fpath, "rb") as fh:
+            total += sum(1 for line in fh if line.strip())
+    logger.debug("counted %d lines across %d files", total, len(resolved))
+    return total
+
+
 # ---------------------------------------------------------------------------
 # JSONL SOURCE step
 # ---------------------------------------------------------------------------

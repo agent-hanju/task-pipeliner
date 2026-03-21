@@ -7,7 +7,7 @@ from pathlib import Path
 
 from task_pipeliner.config import PipelineConfig, StepConfig, load_config
 from task_pipeliner.engine import PipelineEngine, StepRegistry
-from task_pipeliner.io import JsonlSourceStep
+from task_pipeliner.io import JsonlSourceStep, count_jsonl_lines
 from task_pipeliner.stats import StatsCollector
 
 logger = logging.getLogger(__name__)
@@ -67,6 +67,9 @@ class Pipeline:
 
         stats = StatsCollector()
         stats.setup_log_handler(output_dir / "pipeline.log")
+
+        total = count_jsonl_lines(inputs)
+        stats.set_total_items(total)
 
         try:
             # Register the internal JSONL source step

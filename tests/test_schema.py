@@ -227,6 +227,35 @@ class TestBaseStep:
         with pytest.raises(NotImplementedError):
             list(step.items())
 
+    def test_initial_state_defaults_to_none(self) -> None:
+        """BaseStep.initial_state defaults to None."""
+
+        class SimpleStep(BaseStep[_NoOpResult]):
+            step_type = StepType.PARALLEL
+
+            def process(self, item: Any, state: Any, emit: Any) -> _NoOpResult:
+                return _NoOpResult()
+
+        assert SimpleStep().initial_state is None
+
+    def test_initial_state_override(self) -> None:
+        """Subclass can override initial_state to return custom state."""
+
+        class StatefulStep(BaseStep[_NoOpResult]):
+            step_type = StepType.SEQUENTIAL
+
+            @property
+            def initial_state(self) -> dict[str, int]:
+                return {"count": 0}
+
+            def process(self, item: Any, state: Any, emit: Any) -> _NoOpResult:
+                return _NoOpResult()
+
+        step = StatefulStep()
+        assert step.initial_state == {"count": 0}
+        # Each access should return a fresh dict (not cached)
+        assert step.initial_state is not step.initial_state or step.initial_state == {"count": 0}
+
     def test_close_is_noop_by_default(self) -> None:
         """close() should be callable without error (no-op)."""
 
@@ -319,13 +348,21 @@ class TestExecutionConfig:
     def test_defaults(self) -> None:
         cfg = ExecutionConfig()
         assert cfg.workers == 4
-        assert cfg.queue_size == 200
+        assert cfg.queue_size == 0
         assert cfg.chunk_size == 100
 
-    @pytest.mark.parametrize("field", ["workers", "queue_size", "chunk_size"])
+    @pytest.mark.parametrize("field", ["workers", "chunk_size"])
     def test_zero_value_rejected(self, field: str) -> None:
         with pytest.raises(ConfigValidationError):
             ExecutionConfig(**{field: 0})
+
+    def test_queue_size_zero_allowed(self) -> None:
+        cfg = ExecutionConfig(queue_size=0)
+        assert cfg.queue_size == 0
+
+    def test_queue_size_negative_rejected(self) -> None:
+        with pytest.raises(ConfigValidationError):
+            ExecutionConfig(queue_size=-1)
 
     def test_extra_fields_forbidden(self) -> None:
         with pytest.raises(ConfigValidationError):

@@ -1,0 +1,7 @@
+--- Pipeline Progress (0.7s) --------------------------------------------
+  LoaderStep                                      438 in → 438 main  [done]
+  PreprocessStep           438 in → 372 kept, 66 removed  0.6ms/item  [done]
+  ConvertStep                         372 in → 372 kept  0.1ms/item  [done]
+  DeduplicateStep                     372 in → 372 kept  0.0ms/item  [done]
+  WriterStep                               438 produced  0.1ms/item  [done]
+-------------------------------------------------------------------------

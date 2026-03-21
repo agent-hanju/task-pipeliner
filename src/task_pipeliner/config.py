@@ -51,14 +51,22 @@ class ExecutionConfig(_WrappingModel):
     model_config = ConfigDict(extra="forbid")
 
     workers: int = 4
-    queue_size: int = 200
+    queue_size: int = 0
+    """queue_size is reserved for future disk-spill threshold. 0 means unbounded."""
     chunk_size: int = 100
 
-    @field_validator("workers", "queue_size", "chunk_size")
+    @field_validator("workers", "chunk_size")
     @classmethod
     def _must_be_positive(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("must be positive")
+        return v
+
+    @field_validator("queue_size")
+    @classmethod
+    def _must_be_non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("must be non-negative")
         return v
 
 

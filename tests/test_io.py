@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from task_pipeliner.io import JsonlReader, JsonlSourceStep, JsonlWriter
+from task_pipeliner.io import JsonlReader, JsonlSourceStep, JsonlWriter, count_jsonl_lines
 
 
 class TestJsonlReader:
@@ -86,3 +86,32 @@ class TestJsonlSourceStep:
         step = JsonlSourceStep()
         with pytest.raises(NotImplementedError):
             step.process({}, None, lambda x: None)
+
+
+class TestCountJsonlLines:
+    def test_single_file(self, tmp_path: Path) -> None:
+        f = tmp_path / "data.jsonl"
+        f.write_text('{"a":1}\n{"b":2}\n{"c":3}\n')
+        assert count_jsonl_lines([f]) == 3
+
+    def test_multiple_files(self, tmp_path: Path) -> None:
+        f1 = tmp_path / "a.jsonl"
+        f2 = tmp_path / "b.jsonl"
+        f1.write_text('{"x":1}\n{"x":2}\n')
+        f2.write_text('{"y":1}\n')
+        assert count_jsonl_lines([f1, f2]) == 3
+
+    def test_empty_file(self, tmp_path: Path) -> None:
+        f = tmp_path / "empty.jsonl"
+        f.write_text("")
+        assert count_jsonl_lines([f]) == 0
+
+    def test_empty_list(self) -> None:
+        assert count_jsonl_lines([]) == 0
+
+    def test_directory_expansion(self, tmp_path: Path) -> None:
+        f1 = tmp_path / "a.jsonl"
+        f2 = tmp_path / "b.jsonl"
+        f1.write_text('{"x":1}\n')
+        f2.write_text('{"y":1}\n{"y":2}\n')
+        assert count_jsonl_lines([tmp_path]) == 3

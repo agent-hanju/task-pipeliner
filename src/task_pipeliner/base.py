@@ -68,6 +68,17 @@ class BaseStep[R: BaseResult](ABC):
         """
         ...
 
+    @property
+    def initial_state(self) -> Any:
+        """Return the initial state object for this step.
+
+        Override in subclasses that need mutable state passed to process().
+        The returned object is passed as the ``state`` argument to every
+        ``process()`` call. For SEQUENTIAL steps, it is the same object
+        across all calls (accumulated in-place).
+        """
+        return None
+
     def items(self) -> Generator[Any, None, None]:
         """SOURCE 스텝 전용. 아이템을 yield한다."""
         raise NotImplementedError("items() must be implemented by SOURCE steps")
