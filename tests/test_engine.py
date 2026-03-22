@@ -12,6 +12,7 @@ from dummy_steps import (
     DummySourceStep,
     FilterEvenStep,
     InitialStateStep,
+    LifecycleTrackingStep,
     PassthroughStep,
     SlowStep,
     TerminalStep,
@@ -709,3 +710,49 @@ class TestEngineProgressIntegration:
         )
         engine.run(output_dir=tmp_path / "out")
         assert parent_logger.propagate == original_propagate
+
+
+# ---------------------------------------------------------------------------
+# Step open/close lifecycle
+# ---------------------------------------------------------------------------
+
+
+class TestStepOpenLifecycle:
+    """open() is called before processing begins, close() after."""
+
+    def _make_engine(
+        self,
+        steps: list[StepConfig],
+        registry_map: dict[str, type],
+        *,
+        workers: int = 1,
+        queue_size: int = 0,
+        chunk_size: int = 50,
+    ) -> tuple[PipelineEngine, StatsCollector]:
+        config = PipelineConfig(
+            pipeline=steps,
+            execution=ExecutionConfig(
+                workers=workers, queue_size=queue_size, chunk_size=chunk_size
+            ),
+        )
+        registry = StepRegistry()
+        for name, cls in registry_map.items():
+            registry.register(name, cls)
+        stats = StatsCollector()
+        engine = PipelineEngine(config=config, registry=registry, stats=stats)
+        return engine, stats
+
+    @pytest.mark.timeout(30)
+    def test_sequential_step_open_called(self, tmp_path: Path) -> None:
+        """SEQUENTIAL step's open() is called before process() begins."""
+        engine, stats = self._make_engine(
+            [
+                StepConfig(
+                    type="source", items=list(range(3)), outputs={"main": "lifecycle"}
+                ),
+                StepConfig(type="lifecycle"),
+            ],
+            {"source": DummySourceStep, "lifecycle": LifecycleTrackingStep},
+        )
+        engine.run(output_dir=tmp_path / "out")
+        assert stats._stats["LifecycleTrackingStep"].processed == 3

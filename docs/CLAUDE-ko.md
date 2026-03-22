@@ -52,6 +52,7 @@
 `sample/` 디렉토리 하위 개발 시, 이 파일과 함께 각 샘플 프로젝트의 `CLAUDE.md`를 따른다.
 
 - `sample/taxonomy-converter/` — 네이버 뉴스 taxonomy 변환기 (`sample/taxonomy-converter/CLAUDE.md`)
+- `sample/pretrain-data-filter/` — 한국어 사전학습 데이터 품질 필터 + 중복 제거 파이프라인 (`sample/pretrain-data-filter/CLAUDE.md`)
 
 ## 주의사항
 
@@ -65,6 +66,19 @@
 - 테스트 구조는 AAA(Arrange-Act-Assert) 패턴을 따른다.
 - 다중 입력을 검증할 때는 `@pytest.mark.parametrize`를 사용한다.
 - Queue/sentinel 관련 모든 테스트에는 `@pytest.mark.timeout`을 붙여 deadlock을 감지한다.
+
+## Step 생명주기
+
+```
+__init__(config) → [is_ready() 게이팅] → open() → process() × N → close()
+```
+
+- `__init__`: 설정 주입만. 런타임 리소스(파일 핸들, 커넥션)를 여기서 획득하지 않는다.
+- `open()`: 첫 `process()` 호출 직전에 1회 호출 (`is_ready()` 통과 후). 런타임 리소스 획득용 (파일 열기, 임시 디렉토리 생성, 커넥션 수립).
+- `process()`: 아이템당 호출. 핵심 처리 로직.
+- `close()`: 모든 아이템 처리 후 1회 호출 (`finally` 블록 — 보장됨). `open()`에서 획득한 리소스를 해제한다.
+
+**PARALLEL step 주의사항:** `open()`과 `close()`는 **메인 프로세스 인스턴스**에서만 실행된다. 워커 프로세스는 pickle로 복원된 복사본을 받으며 `open()`을 호출하지 않는다. 워커에서 프로세스별 리소스가 필요하면 `process()` 내에서 lazy 초기화를 사용한다.
 
 ## Pickle 원칙
 

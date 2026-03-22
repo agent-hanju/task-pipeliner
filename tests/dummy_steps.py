@@ -255,6 +255,29 @@ class StateGatedStep(BaseStep[NullResult]):
         return NullResult()
 
 
+class LifecycleTrackingStep(BaseStep[NullResult]):
+    """SEQUENTIAL terminal — tracks open/close calls for lifecycle testing."""
+
+    @property
+    def step_type(self) -> StepType:
+        return StepType.SEQUENTIAL
+
+    def __init__(self, **_kwargs: Any) -> None:
+        self.opened = False
+        self.closed = False
+        self.process_count = 0
+
+    def open(self) -> None:
+        self.opened = True
+
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> NullResult:
+        self.process_count += 1
+        return NullResult()
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class InitialStateStep(BaseStep[NullResult]):
     """SEQUENTIAL step that provides initial_state and mutates it during process()."""
 

@@ -117,6 +117,26 @@ class BaseStep[R: BaseResult](ABC):
             )
         self._state_dispatch(target, state)
 
+    def open(self) -> None:
+        """Acquire resources right before processing begins.
+
+        Called once per execution, after ``is_ready()`` passes and before
+        the first ``process()`` call.  Paired with ``close()``.
+
+        Typical use: opening file handles, database connections, or
+        temporary directories that should not be created at ``__init__``
+        time.
+
+        .. note::
+
+            For PARALLEL steps this runs on the **main-process**
+            instance, not on the worker-process copies.  Worker
+            processes receive a pickle-restored copy of the step
+            and do not call ``open()``.  Use lazy initialisation
+            inside ``process()`` if workers need per-process
+            resources.
+        """
+
     def close(self) -> None:
         """Release resources held by this step.
 

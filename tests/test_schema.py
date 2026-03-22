@@ -256,6 +256,18 @@ class TestBaseStep:
         # Each access should return a fresh dict (not cached)
         assert step.initial_state is not step.initial_state or step.initial_state == {"count": 0}
 
+    def test_open_is_noop_by_default(self) -> None:
+        """open() should be callable without error (no-op)."""
+
+        class NormalStep(BaseStep[_NoOpResult]):
+            step_type = StepType.PARALLEL
+
+            def process(self, item: Any, state: Any, emit: Any) -> _NoOpResult:
+                return _NoOpResult()
+
+        step = NormalStep()
+        step.open()  # should not raise
+
     def test_close_is_noop_by_default(self) -> None:
         """close() should be callable without error (no-op)."""
 
@@ -267,6 +279,32 @@ class TestBaseStep:
 
         step = NormalStep()
         step.close()  # should not raise
+
+    def test_open_close_symmetry(self) -> None:
+        """Subclass can override both open() and close() for resource management."""
+
+        class ResourceStep(BaseStep[_NoOpResult]):
+            step_type = StepType.SEQUENTIAL
+
+            def __init__(self) -> None:
+                self.opened = False
+                self.closed = False
+
+            def open(self) -> None:
+                self.opened = True
+
+            def process(self, item: Any, state: Any, emit: Any) -> _NoOpResult:
+                return _NoOpResult()
+
+            def close(self) -> None:
+                self.closed = True
+
+        step = ResourceStep()
+        assert not step.opened and not step.closed
+        step.open()
+        assert step.opened and not step.closed
+        step.close()
+        assert step.opened and step.closed
 
 
 # ── W-03: config ──────────────────────────────────────────────────

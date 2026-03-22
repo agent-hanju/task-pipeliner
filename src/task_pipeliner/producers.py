@@ -69,6 +69,7 @@ class InputProducer:
         logger.info("input producer started step=%s", self._step.name)
         first_item_recorded = False
         try:
+            self._step.open()
             if self._stats is not None:
                 self._stats.set_state(self._step.name, "processing")
             for item in self._step.items():
@@ -226,6 +227,7 @@ class SequentialProducer(BaseProducer):
         first_item_recorded = False
         try:
             self._wait_until_is_ready()
+            self.step.open()
             emit = self._make_emit()
             self.stats.set_state(self.step.name, "idle")
             logger.info("producer started step=%s", self.step.name)
@@ -393,6 +395,7 @@ class ParallelProducer(BaseProducer):
         ctx = multiprocessing.get_context("spawn")
         try:
             self._wait_until_is_ready()
+            self.step.open()
             self.stats.set_state(self.step.name, "idle")
             logger.info("producer started step=%s", self.step.name)
 

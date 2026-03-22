@@ -66,6 +66,19 @@ When working under the `sample/` directory, follow each sample project's own `CL
 - Use `@pytest.mark.parametrize` for multiple input scenarios.
 - Apply `@pytest.mark.timeout` to all Queue/sentinel tests to detect deadlocks.
 
+## Step Lifecycle
+
+```
+__init__(config) → [is_ready() gating] → open() → process() × N → close()
+```
+
+- `__init__`: Config injection only. Do NOT acquire runtime resources (file handles, connections) here.
+- `open()`: Called once, right before the first `process()` call (after `is_ready()` passes). Use for runtime resource acquisition (open files, create temp dirs, establish connections).
+- `process()`: Called per item. Core processing logic.
+- `close()`: Called once after all items are processed (in `finally` block — guaranteed). Release resources acquired in `open()`.
+
+**PARALLEL step caveat:** `open()` and `close()` run on the **main-process instance** only. Worker processes receive pickle-restored copies and do NOT call `open()`. If workers need per-process resources (DB connections, model loading), use lazy initialisation inside `process()`.
+
 ## Pickle Rule
 
 All objects passed across processes must be picklable (spawn mode requirement).

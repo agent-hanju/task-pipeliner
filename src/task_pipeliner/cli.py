@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
 import click
-import orjson
 
 from task_pipeliner.pipeline import Pipeline
 
@@ -89,7 +89,7 @@ def batch_cmd(
     logging.basicConfig(level=logging.INFO)
     pipeline: Pipeline = ctx.obj["pipeline"]
 
-    jobs = orjson.loads(jobs_file.read_bytes())
+    jobs = json.loads(jobs_file.read_text(encoding="utf-8"))
     if not isinstance(jobs, list):
         raise click.ClickException("jobs file must contain a JSON array")
 

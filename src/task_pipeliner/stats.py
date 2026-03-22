@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-
-import orjson
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +134,7 @@ class StatsCollector:
             path.parent.mkdir(parents=True, exist_ok=True)
             data = [s.to_dict() for s in self._stats.values()]
             tmp = path.with_suffix(".tmp")
-            tmp.write_bytes(orjson.dumps(data, option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS))
+            tmp.write_text(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False))
             os.replace(str(tmp), str(path))
             logger.info("stats JSON written to %s", path)
         except Exception:
