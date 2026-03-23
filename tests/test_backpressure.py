@@ -25,7 +25,7 @@ class TestBackpressure:
         ctx = multiprocessing.get_context("spawn")
         in_q: multiprocessing.Queue[Any] = ctx.Queue()
         out_q: multiprocessing.Queue[Any] = ctx.Queue(maxsize=3)
-        result_q: multiprocessing.Queue[Any] = ctx.Queue()
+
         stats = StatsCollector()
         stats.register("PassthroughStep")
 
@@ -39,7 +39,7 @@ class TestBackpressure:
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-            result_queue=result_q,
+
         )
 
         # Run producer in thread — it will block when out_q fills up
@@ -66,7 +66,7 @@ class TestBackpressure:
         ctx = multiprocessing.get_context("spawn")
         in_q: multiprocessing.Queue[Any] = ctx.Queue()
         out_q: multiprocessing.Queue[Any] = ctx.Queue(maxsize=2)
-        result_q: multiprocessing.Queue[Any] = ctx.Queue()
+
         stats = StatsCollector()
         stats.register("PassthroughStep")
 
@@ -80,7 +80,7 @@ class TestBackpressure:
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-            result_queue=result_q,
+
         )
 
         t = threading.Thread(target=producer.run)
@@ -103,7 +103,7 @@ class TestBackpressure:
         ctx = multiprocessing.get_context("spawn")
         in_q: multiprocessing.Queue[Any] = ctx.Queue()
         out_q: multiprocessing.Queue[Any] = ctx.Queue(maxsize=5)
-        result_q: multiprocessing.Queue[Any] = ctx.Queue()
+
         stats = StatsCollector()
         stats.register("SlowStep")
 
@@ -117,7 +117,7 @@ class TestBackpressure:
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-            result_queue=result_q,
+
             workers=2,
             chunk_size=5,
         )

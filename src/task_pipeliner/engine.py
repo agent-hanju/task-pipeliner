@@ -10,7 +10,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from task_pipeliner.base import BaseResult, BaseStep, StepType
+from task_pipeliner.base import BaseStep, StepType
 from task_pipeliner.config import PipelineConfig
 from task_pipeliner.exceptions import ConfigValidationError, StepRegistrationError
 from task_pipeliner.producers import (
@@ -182,7 +182,7 @@ class PipelineEngine:
         # config의 type 이름으로 registry에서 클래스를 찾아 인스턴스화
         # StepConfig의 extra 필드들이 Step.__init__의 kwargs로 전달됨
         # name 필드가 인스턴스 고유 키 (생략 시 type과 동일)
-        instance_by_name: dict[str, BaseStep[Any]] = {}
+        instance_by_name: dict[str, BaseStep] = {}
         for step_cfg in enabled_cfgs:
             cls = self.registry.get(step_cfg.type)
             extra = step_cfg.model_extra or {}
@@ -305,7 +305,6 @@ class PipelineEngine:
         )
 
         # 나머지 step들의 Producer 생성
-        result_queues: dict[str, multiprocessing.Queue[Any]] = {}
         producers: list[SequentialProducer | ParallelProducer] = []
         producer_by_name: dict[str, SequentialProducer | ParallelProducer] = {}
         state_events: dict[str, threading.Event] = {}  # state 변경 시 깨우기 위한 이벤트
@@ -314,8 +313,6 @@ class PipelineEngine:
             step = instance_by_name[step_name]
             in_q = merged_input[step_name]
             out_qs = output_queues_map[step_name]
-            rq: multiprocessing.Queue[Any] = ctx.Queue()  # 결과 수집용 큐
-            result_queues[step_name] = rq
             evt = threading.Event()
             state_events[step.name] = evt
 
@@ -328,7 +325,6 @@ class PipelineEngine:
                     input_queue=in_q,
                     output_queues=out_qs,
                     stats=self.stats,
-                    result_queue=rq,
                     state=step.initial_state,
                     workers=self.config.execution.workers,
                     chunk_size=self.config.execution.chunk_size,
@@ -340,7 +336,6 @@ class PipelineEngine:
                     input_queue=in_q,
                     output_queues=out_qs,
                     stats=self.stats,
-                    result_queue=rq,
                     state=step.initial_state,
                     state_changed_event=evt,
                 )
@@ -474,20 +469,6 @@ class PipelineEngine:
             signal.signal(signal.SIGINT, original_sigint)
             if hasattr(signal, "SIGBREAK") and original_sigbreak is not None:
                 signal.signal(signal.SIGBREAK, original_sigbreak)
-
-            import queue as _queue
-
-            # 각 step의 결과(BaseResult)를 result_queue에서 꺼내서 파일로 기록
-            output_dir.mkdir(parents=True, exist_ok=True)
-            for step_name in processing_names:
-                rq = result_queues[step_name]
-                step = instance_by_name[step_name]
-                try:
-                    result: BaseResult = rq.get(timeout=2)
-                    result.write(output_dir, step_name=step.name)
-                    logger.debug("result written for step %s", step.name)
-                except _queue.Empty:
-                    logger.debug("no result for step %s", step.name)
 
             # 통계 JSON 저장
             self.stats.write_json(output_dir / "stats.json")

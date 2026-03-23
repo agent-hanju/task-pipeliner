@@ -121,24 +121,6 @@ class TestPipelineEngine:
         assert stats._stats["filter_even"].processed == 10
 
     @pytest.mark.timeout(30)
-    def test_filter_even_result_file(self, tmp_path: Path) -> None:
-        """FilterEvenStep — count_result.json written by result.write()."""
-        engine, stats = self._make_engine(
-            [
-                StepConfig(type="source", items=list(range(10)), outputs={"main": "filter_even"}),
-                StepConfig(type="filter_even"),
-            ],
-            {"source": DummySourceStep, "filter_even": FilterEvenStep},
-        )
-        output_dir = tmp_path / "out"
-        engine.run(output_dir=output_dir)
-        result_file = output_dir / "count_result.json"
-        assert result_file.exists()
-        data = orjson.loads(result_file.read_bytes())
-        assert data["passed"] == 5
-        assert data["filtered"] == 5
-
-    @pytest.mark.timeout(30)
     def test_multi_step_chain(self, tmp_path: Path) -> None:
         """source → passthrough → filter_even: items flow through all steps."""
         engine, stats = self._make_engine(

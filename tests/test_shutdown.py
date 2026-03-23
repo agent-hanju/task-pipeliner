@@ -39,22 +39,6 @@ class TestNormalCompletion:
         assert pt["processed"] == 10
 
     @pytest.mark.timeout(20)
-    def test_result_write_called(self, tmp_path: Path) -> None:
-        """Normal completion → BaseResult.write() output file exists."""
-        output_dir = tmp_path / "out"
-        proc = subprocess.run(
-            [sys.executable, _HELPER, str(output_dir), "filter"],
-            timeout=15,
-            capture_output=True,
-        )
-        assert proc.returncode == 0, proc.stderr.decode()
-        result_file = output_dir / "count_result.json"
-        assert result_file.exists()
-        data = orjson.loads(result_file.read_bytes())
-        assert data["passed"] == 10
-        assert data["filtered"] == 10
-
-    @pytest.mark.timeout(20)
     def test_pipeline_log_exists(self, tmp_path: Path) -> None:
         """Normal completion → pipeline.log exists with content."""
         output_dir = tmp_path / "out"

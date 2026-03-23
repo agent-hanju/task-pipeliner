@@ -17,10 +17,9 @@ class TestPublicAPI:
         assert Pipeline is not None
 
     def test_base_classes_importable(self) -> None:
-        from task_pipeliner import BaseResult, BaseStep, StepType
+        from task_pipeliner import BaseStep, StepType
 
         assert BaseStep is not None
-        assert BaseResult is not None
         assert StepType is not None
 
     def test_producers_importable(self) -> None:
@@ -46,7 +45,6 @@ class TestPublicAPI:
         expected = {
             "Pipeline",
             "BaseStep",
-            "BaseResult",
             "StepType",
             "InputProducer",
             "ParallelProducer",

@@ -6,7 +6,7 @@ import multiprocessing
 from typing import Any
 
 import pytest
-from dummy_steps import ErrorOnItemStep, NullResult
+from dummy_steps import ErrorOnItemStep
 
 from task_pipeliner.producers import (
     ParallelProducer,
@@ -20,11 +20,10 @@ from task_pipeliner.stats import StatsCollector
 class TestErrorHandlingSequential:
     def _run(
         self, items: list[Any], error_value: Any = -1
-    ) -> tuple[list[Any], Any, StatsCollector]:
+    ) -> tuple[list[Any], StatsCollector]:
         ctx = multiprocessing.get_context("spawn")
         in_q: multiprocessing.Queue[Any] = ctx.Queue()
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
-        result_q: multiprocessing.Queue[Any] = ctx.Queue()
         stats = StatsCollector()
         step = ErrorOnItemStep(error_value=error_value)
         stats.register(step.name)
@@ -38,7 +37,6 @@ class TestErrorHandlingSequential:
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-            result_queue=result_q,
         )
         producer.run()
 
@@ -49,13 +47,7 @@ class TestErrorHandlingSequential:
                 break
             collected.append(obj)
 
-        import queue
-
-        try:
-            result = result_q.get(timeout=2)
-        except queue.Empty:
-            result = None
-        return collected, result, stats
+        return collected, stats
 
     @pytest.mark.timeout(15)
     @pytest.mark.parametrize(
@@ -72,22 +64,21 @@ class TestErrorHandlingSequential:
         expected_ok: list[int],
         expected_err: int,
     ) -> None:
-        collected, result, stats = self._run(items)
+        collected, stats = self._run(items)
         assert collected == expected_ok
         assert stats._stats["ErrorOnItemStep"].errored == expected_err
 
     @pytest.mark.timeout(15)
     def test_100_percent_error_rate(self) -> None:
         """All items error → 0 output + sentinel still propagated."""
-        collected, result, stats = self._run([-1, -1, -1, -1, -1])
+        collected, stats = self._run([-1, -1, -1, -1, -1])
         assert collected == []
-        assert result is None
         assert stats._stats["ErrorOnItemStep"].errored == 5
 
     @pytest.mark.timeout(15)
     def test_stats_errored_accurate(self) -> None:
         items = list(range(10)) + [-1, -1]
-        collected, result, stats = self._run(items)
+        collected, stats = self._run(items)
         assert stats._stats["ErrorOnItemStep"].errored == 2
         assert stats._stats["ErrorOnItemStep"].processed == 10
 
@@ -97,7 +88,6 @@ class TestErrorHandlingSequential:
         ctx = multiprocessing.get_context("spawn")
         in_q: multiprocessing.Queue[Any] = ctx.Queue()
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
-        result_q: multiprocessing.Queue[Any] = ctx.Queue()
         stats = StatsCollector()
         step = ErrorOnItemStep(error_value=-1)
         stats.register(step.name)
@@ -112,7 +102,6 @@ class TestErrorHandlingSequential:
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-            result_queue=result_q,
         )
         producer.run()
 
@@ -121,12 +110,12 @@ class TestErrorHandlingSequential:
         assert is_sentinel(out_q.get(timeout=2))
 
     @pytest.mark.timeout(15)
-    def test_accumulated_result_published_despite_errors(self) -> None:
-        """Errors don't prevent accumulated result from being published."""
+    def test_errors_do_not_prevent_processing(self) -> None:
+        """Errors don't prevent remaining items from being processed."""
         items = [1, -1, 2, -1, 3]
-        collected, result, stats = self._run(items)
-        assert isinstance(result, NullResult)
+        collected, stats = self._run(items)
         assert len(collected) == 3
+        assert stats._stats["ErrorOnItemStep"].errored == 2
 
 
 class TestErrorHandlingParallel:
@@ -136,7 +125,6 @@ class TestErrorHandlingParallel:
         ctx = multiprocessing.get_context("spawn")
         in_q: multiprocessing.Queue[Any] = ctx.Queue()
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
-        result_q: multiprocessing.Queue[Any] = ctx.Queue()
         stats = StatsCollector()
         step = ErrorOnItemStep(error_value=-1)
         stats.register(step.name)
@@ -151,7 +139,6 @@ class TestErrorHandlingParallel:
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-            result_queue=result_q,
             workers=2,
             chunk_size=3,
         )
@@ -169,12 +156,11 @@ class TestErrorHandlingParallel:
         assert stats._stats[step.name].processed == 4
 
     @pytest.mark.timeout(30)
-    def test_graceful_result_publish_on_error(self) -> None:
-        """Even with errors, accumulated result is still published to result_queue."""
+    def test_errors_do_not_prevent_parallel_processing(self) -> None:
+        """Even with errors, remaining items are processed and emitted."""
         ctx = multiprocessing.get_context("spawn")
         in_q: multiprocessing.Queue[Any] = ctx.Queue()
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
-        result_q: multiprocessing.Queue[Any] = ctx.Queue()
         stats = StatsCollector()
         step = ErrorOnItemStep(error_value=-1)
         stats.register(step.name)
@@ -189,18 +175,17 @@ class TestErrorHandlingParallel:
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-            result_queue=result_q,
             workers=2,
             chunk_size=2,
         )
         producer.run()
 
-        # Drain output
+        collected = []
         while True:
             obj = out_q.get(timeout=5)
             if is_sentinel(obj):
                 break
+            collected.append(obj)
 
-        # Result must be published despite errors
-        result = result_q.get(timeout=2)
-        assert isinstance(result, NullResult)
+        assert sorted(collected) == [1, 2, 3]
+        assert stats._stats[step.name].errored == 2

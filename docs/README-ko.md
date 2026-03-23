@@ -32,27 +32,13 @@ python -m venv .venv
 ```python
 # steps.py
 from collections.abc import Callable, Generator
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from task_pipeliner import BaseResult, BaseStep, StepType
+from task_pipeliner import BaseStep, StepType
 
 
-@dataclass
-class CountResult(BaseResult):
-    kept: int = 0
-    removed: int = 0
-
-    def merge(self, other: "CountResult") -> "CountResult":
-        return CountResult(kept=self.kept + other.kept, removed=self.removed + other.removed)
-
-    def write(self, output_dir: Path, step_name: str = "") -> None:
-        import json
-        (output_dir / "summary.json").write_text(json.dumps({"kept": self.kept, "removed": self.removed}))
-
-
-class LoaderStep(BaseStep[CountResult]):
+class LoaderStep(BaseStep):
     """SOURCE 스텝: 텍스트 파일에서 줄 단위로 읽기."""
     outputs = ("main",)
 
@@ -69,11 +55,11 @@ class LoaderStep(BaseStep[CountResult]):
                 for line in f:
                     yield {"text": line.strip()}
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> CountResult:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         raise NotImplementedError
 
 
-class FilterStep(BaseStep[CountResult]):
+class FilterStep(BaseStep):
     """PARALLEL 스텝: 텍스트 길이로 필터링."""
     outputs = ("kept", "removed")
 
@@ -84,15 +70,14 @@ class FilterStep(BaseStep[CountResult]):
     def __init__(self, min_length: int = 10, **_: Any) -> None:
         self._min_length = min_length
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> CountResult:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         if len(item.get("text", "")) >= self._min_length:
             emit(item, "kept")
-            return CountResult(kept=1)
-        emit(item, "removed")
-        return CountResult(removed=1)
+        else:
+            emit(item, "removed")
 
 
-class WriterStep(BaseStep[CountResult]):
+class WriterStep(BaseStep):
     """SEQUENTIAL 터미널 스텝: 아이템을 JSONL 파일에 기록."""
     outputs = ()  # 터미널 — emit 호출 불가
 
@@ -107,10 +92,9 @@ class WriterStep(BaseStep[CountResult]):
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._fh = open(self._path, "w", encoding="utf-8")
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> CountResult:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         import json
         self._fh.write(json.dumps(item) + "\n")
-        return CountResult(kept=1)
 
     def close(self) -> None:
         self._fh.close()
@@ -187,13 +171,6 @@ __init__(config) → is_ready() 게이팅 → open() → process() × N → clos
 ```
 
 > `open()`과 `close()`는 **메인 프로세스**에서만 실행됨. PARALLEL 스텝의 워커 프로세스는 pickle로 복원된 복사본을 받으며 `open()`을 호출하지 않음.
-
-### BaseResult
-
-아이템과 워커에 걸쳐 누적되는 결과 데이터 객체:
-
-- `merge(other)` — 두 결과를 합침 (결합법칙 필수).
-- `write(output_dir, step_name="")` — 최종 결과를 파일로 기록.
 
 ### Pipeline
 
@@ -305,7 +282,7 @@ pipeline:
 2-pass 알고리즘용 (히스토그램 구축 → 히스토그램으로 정제):
 
 ```python
-class CollectorStep(BaseStep[R]):
+class CollectorStep(BaseStep):
     """Pass 1: 통계를 누적하면서 아이템을 전달."""
     step_type = StepType.SEQUENTIAL
     outputs = ("main",)
@@ -313,14 +290,13 @@ class CollectorStep(BaseStep[R]):
     def process(self, item, state, emit):
         self._histogram.update(item)
         emit(item, "main")             # 즉시 전달
-        return result
 
     def close(self):
         # 모든 아이템 처리 후, 게이트된 스텝에 state 전달 (설정의 name 기준)
         self.set_step_state("cleaner", self._histogram)
 
 
-class CleanerStep(BaseStep[R]):
+class CleanerStep(BaseStep):
     """Pass 2: 수집된 통계를 사용하여 아이템 처리."""
     step_type = StepType.SEQUENTIAL
     outputs = ("kept",)
@@ -331,7 +307,6 @@ class CleanerStep(BaseStep[R]):
     def process(self, item, state, emit):
         cleaned = apply_histogram(item, state)
         emit(cleaned, "kept")
-        return result
 ```
 
 `is_ready()`가 `False`인 동안 아이템은 `CleanerStep` 큐에 대기. `CollectorStep.close()`가 `set_step_state()`로 state를 전달하면, 게이트된 스텝이 언블록되어 대기 중인 모든 아이템을 처리.
@@ -397,19 +372,17 @@ task-pipeliner batch jobs.json
 
 ### 단계별 가이드
 
-1. **Result 클래스 정의**: `BaseResult`를 확장하여 `merge()`와 `write()` 구현.
-
-2. **Step 클래스를 모듈 레벨에 정의** (spawn 모드 pickle 필수):
+1. **Step 클래스를 모듈 레벨에 정의** (spawn 모드 pickle 필수):
    - `SOURCE` 스텝: `items()`로 입력 데이터 생산.
    - `PARALLEL` 스텝: 무상태 `process()` — CPU 바운드 작업.
    - `SEQUENTIAL` 스텝: 상태 기반 `process()` — 중복 제거, 집계, I/O.
    - 터미널 스텝: `outputs = ()`로 설정, `emit()` 호출 금지.
 
-3. **`pipeline_config.yaml` 작성**: `type`, `outputs`, 스텝별 파라미터로 DAG 정의.
+2. **`pipeline_config.yaml` 작성**: `type`, `outputs`, 스텝별 파라미터로 DAG 정의.
 
-4. **`run.py` 작성**: `Pipeline.register_all()`로 스텝 등록 후 `pipeline.run()` 호출.
+3. **`run.py` 작성**: `Pipeline.register_all()`로 스텝 등록 후 `pipeline.run()` 호출.
 
-5. **실행 및 확인**: `output/stats.json`, `output/pipeline.log`, `output/progress.log` 확인.
+4. **실행 및 확인**: `output/stats.json`, `output/pipeline.log`, `output/progress.log` 확인.
 
 ### 제약 사항
 
@@ -422,8 +395,7 @@ task-pipeliner batch jobs.json
 | 클래스 | 모듈 | 설명 |
 |--------|------|------|
 | `Pipeline` | `task_pipeliner` | 스텝 등록, 파이프라인 실행 |
-| `BaseStep[R]` | `task_pipeliner` | 모든 스텝의 추상 기본 클래스 |
-| `BaseResult` | `task_pipeliner` | 결과 데이터 추상 기본 클래스 |
+| `BaseStep` | `task_pipeliner` | 모든 스텝의 추상 기본 클래스 |
 | `StepType` | `task_pipeliner` | Enum: `SOURCE`, `PARALLEL`, `SEQUENTIAL` |
 | `PipelineError` | `task_pipeliner` | 기본 예외 |
 | `StepRegistrationError` | `task_pipeliner` | 중복/pickle 불가 등록 |

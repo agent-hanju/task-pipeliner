@@ -90,7 +90,7 @@ class TestProducerStateGating:
         ctx = multiprocessing.get_context("spawn")
         in_q: multiprocessing.Queue[Any] = ctx.Queue()
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
-        result_q: multiprocessing.Queue[Any] = ctx.Queue()
+
         stats = StatsCollector()
         stats.register("StateGatedStep")
 
@@ -104,7 +104,7 @@ class TestProducerStateGating:
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-            result_queue=result_q,
+
             state=None,  # is_ready returns False
             state_changed_event=state_changed,
         )
@@ -134,7 +134,7 @@ class TestProducerStateGating:
         ctx = multiprocessing.get_context("spawn")
         in_q: multiprocessing.Queue[Any] = ctx.Queue()
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
-        result_q: multiprocessing.Queue[Any] = ctx.Queue()
+
         stats = StatsCollector()
         stats.register("PassthroughStep")
 
@@ -146,7 +146,7 @@ class TestProducerStateGating:
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-            result_queue=result_q,
+
         )
 
         t = threading.Thread(target=producer.run)

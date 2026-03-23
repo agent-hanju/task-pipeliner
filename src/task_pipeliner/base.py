@@ -1,12 +1,11 @@
-"""Abstract base classes for pipeline steps and results."""
+"""Abstract base classes for pipeline steps."""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
 from enum import Enum
-from pathlib import Path
-from typing import Any, ClassVar, Self
+from typing import Any, ClassVar
 
 
 class StepType(Enum):
@@ -15,26 +14,7 @@ class StepType(Enum):
     SOURCE = "source"
 
 
-class BaseResult(ABC):
-    """Interface for step result data objects.
-
-    Each result type carries its own merge rules and file output rules,
-    keeping the framework generic — the Producer merges and writes
-    without domain knowledge.
-    """
-
-    @abstractmethod
-    def merge(self, other: Self) -> Self:
-        """Combine two results into one (must be associative)."""
-        ...
-
-    @abstractmethod
-    def write(self, output_dir: Path, step_name: str = "") -> None:
-        """Write this result to files under *output_dir*."""
-        ...
-
-
-class BaseStep[R: BaseResult](ABC):
+class BaseStep(ABC):
     """Abstract base for individual-item processing steps."""
 
     outputs: ClassVar[tuple[str, ...]] = ()
@@ -66,7 +46,7 @@ class BaseStep[R: BaseResult](ABC):
     def step_type(self) -> StepType: ...
 
     @abstractmethod
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> R:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         """Process a single item.
 
         *emit(item, tag)* — callback provided by the Producer to forward
@@ -79,9 +59,6 @@ class BaseStep[R: BaseResult](ABC):
 
         ``outputs = ()`` steps (terminal) must NOT call emit —
         doing so raises ``RuntimeError``.
-
-        Returns a result data object ``R`` that the Producer will
-        atomically merge with previous results.
         """
         ...
 
@@ -118,9 +95,7 @@ class BaseStep[R: BaseResult](ABC):
         injects the dispatch callback before the pipeline runs.
         """
         if self._state_dispatch is None:
-            raise RuntimeError(
-                "set_step_state is not available outside pipeline execution"
-            )
+            raise RuntimeError("set_step_state is not available outside pipeline execution")
         self._state_dispatch(target, state)
 
     def open(self) -> None:

@@ -9,10 +9,11 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from multiprocessing.synchronize import Event
 from typing import Any
 
-from task_pipeliner.base import BaseResult, BaseStep
+from task_pipeliner.base import BaseStep
 from task_pipeliner.stats import StatsCollector
 
 logger = logging.getLogger(__name__)
@@ -55,7 +56,7 @@ class InputProducer:
     def __init__(
         self,
         *,
-        step: BaseStep[Any],
+        step: BaseStep,
         output_queues: dict[str, list[multiprocessing.Queue[Any]]],
         stats: StatsCollector | None = None,
     ) -> None:
@@ -115,11 +116,10 @@ class BaseProducer(ABC):
     def __init__(
         self,
         *,
-        step: BaseStep[Any],
+        step: BaseStep,
         input_queue: multiprocessing.Queue[Any],
         output_queues: dict[str, list[multiprocessing.Queue[Any]]],
         stats: StatsCollector,
-        result_queue: multiprocessing.Queue[Any],
         state: Any = None,
         ready_events: list[Event] | None = None,
         next_state_setter: Callable[[Any], None] | None = None,
@@ -134,7 +134,6 @@ class BaseProducer(ABC):
         self.input_queue = input_queue
         self.output_queues = output_queues
         self.stats = stats
-        self.result_queue = result_queue
         self.state = state
         self.ready_events = ready_events
         self.next_state_setter = next_state_setter
@@ -204,11 +203,6 @@ class BaseProducer(ABC):
             self.step.name,
         )
 
-    def _publish_result(self, result: BaseResult) -> None:
-        """Send accumulated result to the result queue."""
-        logger.debug("publishing result for step=%s", self.step.name)
-        self.result_queue.put(result)
-
     @abstractmethod
     def run(self) -> None: ...
 
@@ -223,7 +217,6 @@ class SequentialProducer(BaseProducer):
 
     def run(self) -> None:
         logger.debug("run started step=%s", self.step.name)
-        accumulated: BaseResult | None = None
         first_item_recorded = False
         try:
             self._wait_until_is_ready()
@@ -251,10 +244,9 @@ class SequentialProducer(BaseProducer):
                 self.stats.set_state(self.step.name, "processing")
                 try:
                     proc_start = time.monotonic_ns()
-                    result = self.step.process(item, self.state, emit)
+                    self.step.process(item, self.state, emit)
                     proc_ns = time.monotonic_ns() - proc_start
                     self.stats.add_processing_ns(self.step.name, proc_ns)
-                    accumulated = result if accumulated is None else accumulated.merge(result)
                     self.stats.increment(self.step.name, "processed")
                 except Exception:
                     self.stats.increment(self.step.name, "errored")
@@ -268,8 +260,6 @@ class SequentialProducer(BaseProducer):
         finally:
             self._send_sentinel()
             self.step.close()
-            if accumulated is not None:
-                self._publish_result(accumulated)
             self.stats.set_state(self.step.name, "done")
             self.stats.finish(self.step.name)
             if self.next_state_setter is not None:
@@ -281,40 +271,47 @@ class SequentialProducer(BaseProducer):
 # Module-level worker function (must be picklable)
 # ---------------------------------------------------------------------------
 
+
+@dataclass
+class ChunkResult:
+    """Data returned by a worker process after processing a chunk of items.
+
+    This is a framework-internal transport object — not visible to step authors.
+    """
+
+    processed: int = 0
+    errored: int = 0
+    emitted: dict[str, list[Any]] = field(default_factory=dict)
+    processing_ns: int = 0
+
+
 def _parallel_worker(
     chunk: list[Any],
-    step: BaseStep[Any],
+    step: BaseStep,
     state: Any,
-) -> tuple[BaseResult | None, int, int, dict[str, list[Any]], int]:
+) -> ChunkResult:
     """Process a chunk of items in a worker process.
 
     Items are collected in memory and returned to the producer,
     which puts them into output queues (producer-driven put).
-
-    Returns (accumulated_result, processed_count, errored_count,
-             emitted_items_by_tag, processing_ns).
     """
-    accumulated: BaseResult | None = None
-    processed = 0
-    errored = 0
-    total_processing_ns = 0
+    result = ChunkResult()
     step_outputs = step.outputs
-    emitted_items_by_tag: dict[str, list[Any]] = {}
+    emitted: dict[str, list[Any]] = {}
 
     def _collect_emit(item: Any, tag: str) -> None:
         if not step_outputs:
             raise RuntimeError(f"Step '{step.name}' has no declared outputs — emit() not allowed")
-        emitted_items_by_tag.setdefault(tag, []).append(item)
+        emitted.setdefault(tag, []).append(item)
 
     for item in chunk:
         try:
             t0 = time.monotonic_ns()
-            result = step.process(item, state, _collect_emit)
-            total_processing_ns += time.monotonic_ns() - t0
-            accumulated = result if accumulated is None else accumulated.merge(result)
-            processed += 1
+            step.process(item, state, _collect_emit)
+            result.processing_ns += time.monotonic_ns() - t0
+            result.processed += 1
         except Exception:
-            errored += 1
+            result.errored += 1
             logger.warning(
                 "process() raised in worker step=%s item=%s",
                 step.name,
@@ -322,7 +319,8 @@ def _parallel_worker(
                 exc_info=True,
             )
 
-    return accumulated, processed, errored, emitted_items_by_tag, total_processing_ns
+    result.emitted = emitted
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -344,18 +342,13 @@ class ParallelProducer(BaseProducer):
         self.workers = workers
         self.chunk_size = chunk_size
 
-    def _drain_future_result(
-        self,
-        future_result: tuple[BaseResult | None, int, int, dict[str, list[Any]], int],
-        accumulated: BaseResult | None,
-    ) -> BaseResult | None:
-        """Process a single future's result: update stats, put items into output queues."""
-        chunk_result, processed, errored, emitted_items_by_tag, proc_ns = future_result
-        self.stats.increment(self.step.name, "processed", processed)
-        self.stats.add_processing_ns(self.step.name, proc_ns)
-        if errored:
-            self.stats.increment(self.step.name, "errored", errored)
-        for tag, items in emitted_items_by_tag.items():
+    def _drain_chunk_result(self, chunk_result: ChunkResult) -> None:
+        """Process a single chunk result: update stats, put items into output queues."""
+        self.stats.increment(self.step.name, "processed", chunk_result.processed)
+        self.stats.add_processing_ns(self.step.name, chunk_result.processing_ns)
+        if chunk_result.errored:
+            self.stats.increment(self.step.name, "errored", chunk_result.errored)
+        for tag, items in chunk_result.emitted.items():
             tag_queues = self.output_queues.get(tag)
             if tag_queues is None:
                 logger.debug("unconnected tag=%s step=%s — dropped", tag, self.step.name)
@@ -364,29 +357,19 @@ class ParallelProducer(BaseProducer):
                 for q in tag_queues:
                     q.put(item)
             self.stats.increment_emitted(self.step.name, tag, len(items))
-        if chunk_result is not None:
-            accumulated = (
-                chunk_result if accumulated is None else accumulated.merge(chunk_result)
-            )
-        return accumulated
 
-    def _collect_completed(
-        self,
-        futures: list[Any],
-        accumulated: BaseResult | None,
-    ) -> tuple[list[Any], BaseResult | None]:
+    def _collect_completed(self, futures: list[Any]) -> list[Any]:
         """Collect results from completed futures, putting items into output queues."""
         remaining = []
         for f in futures:
             if f.done():
-                accumulated = self._drain_future_result(f.result(), accumulated)
+                self._drain_chunk_result(f.result())
             else:
                 remaining.append(f)
-        return remaining, accumulated
+        return remaining
 
     def run(self) -> None:
         logger.debug("run started step=%s workers=%d", self.step.name, self.workers)
-        accumulated: BaseResult | None = None
         first_item_recorded = False
         ctx = multiprocessing.get_context("spawn")
         try:
@@ -445,11 +428,11 @@ class ParallelProducer(BaseProducer):
                         )
                         chunk = []
                         # Interleave: collect completed futures between chunk submissions
-                        futures, accumulated = self._collect_completed(futures, accumulated)
+                        futures = self._collect_completed(futures)
 
                 # Collect remaining results
                 for future in as_completed(futures):
-                    accumulated = self._drain_future_result(future.result(), accumulated)
+                    self._drain_chunk_result(future.result())
                 # 모든 아이템 처리 완료 → sentinel 먼저 전파
                 self._send_sentinel()
                 # 처리 완료 시점 기록 (executor cleanup 대기 시간 제외)
@@ -458,8 +441,6 @@ class ParallelProducer(BaseProducer):
                 executor.shutdown(wait=True)
         finally:
             self.step.close()
-            if accumulated is not None:
-                self._publish_result(accumulated)
             self.stats.set_state(self.step.name, "done")
             if self.next_state_setter is not None:
                 self.next_state_setter(self.state)

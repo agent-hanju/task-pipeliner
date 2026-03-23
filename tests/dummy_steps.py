@@ -4,55 +4,19 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Generator
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Self
+from typing import Any
 
 import orjson
 
-from task_pipeliner.base import BaseResult, BaseStep, StepType
-
-# ---------------------------------------------------------------------------
-# Dummy result types
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class NullResult(BaseResult):
-    """No-op result for steps that don't produce result data."""
-
-    def merge(self, other: Self) -> Self:
-        return self
-
-    def write(self, output_dir: Path, step_name: str = "") -> None:
-        pass
-
-
-@dataclass
-class CountResult(BaseResult):
-    """Tracks passed/filtered item counts."""
-
-    passed: int = 0
-    filtered: int = 0
-
-    def merge(self, other: Self) -> Self:
-        return type(self)(  # type: ignore[return-value]
-            passed=self.passed + other.passed,
-            filtered=self.filtered + other.filtered,
-        )
-
-    def write(self, output_dir: Path, step_name: str = "") -> None:
-        (output_dir / "count_result.json").write_bytes(
-            orjson.dumps({"passed": self.passed, "filtered": self.filtered})
-        )
-
+from task_pipeliner.base import BaseStep, StepType
 
 # ---------------------------------------------------------------------------
 # Dummy steps
 # ---------------------------------------------------------------------------
 
 
-class DummySourceStep(BaseStep[NullResult]):
+class DummySourceStep(BaseStep):
     """SOURCE step that yields a fixed list of items."""
 
     outputs = ("main",)
@@ -68,14 +32,14 @@ class DummySourceStep(BaseStep[NullResult]):
     def items(self) -> Generator[Any, None, None]:
         yield from self._items
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> NullResult:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         raise NotImplementedError("SOURCE step does not process")
 
     def close(self) -> None:
         self.closed = True
 
 
-class DummyJsonlSourceStep(BaseStep[NullResult]):
+class DummyJsonlSourceStep(BaseStep):
     """SOURCE step that reads JSONL files (for testing)."""
 
     outputs = ("main",)
@@ -95,11 +59,11 @@ class DummyJsonlSourceStep(BaseStep[NullResult]):
                     if stripped:
                         yield orjson.loads(stripped)
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> NullResult:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         raise NotImplementedError("SOURCE step does not process")
 
 
-class PassthroughStep(BaseStep[NullResult]):
+class PassthroughStep(BaseStep):
     """Emits item unchanged."""
 
     outputs = ("main",)
@@ -108,12 +72,11 @@ class PassthroughStep(BaseStep[NullResult]):
     def step_type(self) -> StepType:
         return StepType.PARALLEL
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> NullResult:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         emit(item, "main")
-        return NullResult()
 
 
-class FilterEvenStep(BaseStep[CountResult]):
+class FilterEvenStep(BaseStep):
     """Emits even integers, filters out odd ones."""
 
     outputs = ("main",)
@@ -122,14 +85,12 @@ class FilterEvenStep(BaseStep[CountResult]):
     def step_type(self) -> StepType:
         return StepType.PARALLEL
 
-    def process(self, item: int, state: Any, emit: Callable[[Any, str], None]) -> CountResult:
+    def process(self, item: int, state: Any, emit: Callable[[Any, str], None]) -> None:
         if item % 2 == 0:
             emit(item, "main")
-            return CountResult(passed=1)
-        return CountResult(filtered=1)
 
 
-class ErrorOnItemStep(BaseStep[NullResult]):
+class ErrorOnItemStep(BaseStep):
     """Raises RuntimeError when item matches error_value."""
 
     outputs = ("main",)
@@ -141,14 +102,13 @@ class ErrorOnItemStep(BaseStep[NullResult]):
     def step_type(self) -> StepType:
         return StepType.PARALLEL
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> NullResult:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         if item == self.error_value:
             raise RuntimeError(f"Error triggered on item {item!r}")
         emit(item, "main")
-        return NullResult()
 
 
-class SlowStep(BaseStep[NullResult]):
+class SlowStep(BaseStep):
     """Sleeps before emitting item."""
 
     outputs = ("main",)
@@ -160,25 +120,23 @@ class SlowStep(BaseStep[NullResult]):
     def step_type(self) -> StepType:
         return StepType.PARALLEL
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> NullResult:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         time.sleep(self.sleep_seconds)
         emit(item, "main")
-        return NullResult()
 
 
-class TerminalStep(BaseStep[NullResult]):
+class TerminalStep(BaseStep):
     """Terminal step — outputs = (), emit not allowed."""
 
     @property
     def step_type(self) -> StepType:
         return StepType.SEQUENTIAL
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> NullResult:
-        # Terminal step should NOT call emit
-        return NullResult()
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
+        pass  # Terminal step should NOT call emit
 
 
-class BranchEvenOddStep(BaseStep[NullResult]):
+class BranchEvenOddStep(BaseStep):
     """Routes even items to 'even' tag, odd items to 'odd' tag."""
 
     outputs = ("even", "odd")
@@ -187,15 +145,14 @@ class BranchEvenOddStep(BaseStep[NullResult]):
     def step_type(self) -> StepType:
         return StepType.SEQUENTIAL
 
-    def process(self, item: int, state: Any, emit: Callable[[Any, str], None]) -> NullResult:
+    def process(self, item: int, state: Any, emit: Callable[[Any, str], None]) -> None:
         if item % 2 == 0:
             emit(item, "even")
         else:
             emit(item, "odd")
-        return NullResult()
 
 
-class StateAwareStep(BaseStep[NullResult]):
+class StateAwareStep(BaseStep):
     """Multiplies item by state['multiplier'] and emits."""
 
     outputs = ("main",)
@@ -206,12 +163,11 @@ class StateAwareStep(BaseStep[NullResult]):
 
     def process(
         self, item: int, state: dict[str, Any], emit: Callable[[Any, str], None]
-    ) -> NullResult:
+    ) -> None:
         emit(state["multiplier"] * item, "main")
-        return NullResult()
 
 
-class CollectorStep(BaseStep[NullResult]):
+class CollectorStep(BaseStep):
     """SEQUENTIAL terminal — collects items, sets another step's state on close."""
 
     def __init__(self, target_step: str = "StateGatedStep") -> None:
@@ -228,15 +184,14 @@ class CollectorStep(BaseStep[NullResult]):
 
     def process(
         self, item: Any, state: list[Any], emit: Callable[[Any, str], None]
-    ) -> NullResult:
+    ) -> None:
         state.append(item)
-        return NullResult()
 
     def close(self) -> None:
         self.set_step_state(self._target_step, list(self._collected))
 
 
-class StateGatedStep(BaseStep[NullResult]):
+class StateGatedStep(BaseStep):
     """SEQUENTIAL step gated by is_ready — waits until state is not None."""
 
     outputs = ("main",)
@@ -250,12 +205,11 @@ class StateGatedStep(BaseStep[NullResult]):
 
     def process(
         self, item: Any, state: list[Any], emit: Callable[[Any, str], None]
-    ) -> NullResult:
+    ) -> None:
         emit({"item": item, "state_len": len(state)}, "main")
-        return NullResult()
 
 
-class LifecycleTrackingStep(BaseStep[NullResult]):
+class LifecycleTrackingStep(BaseStep):
     """SEQUENTIAL terminal — tracks open/close calls for lifecycle testing."""
 
     @property
@@ -270,15 +224,14 @@ class LifecycleTrackingStep(BaseStep[NullResult]):
     def open(self) -> None:
         self.opened = True
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> NullResult:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         self.process_count += 1
-        return NullResult()
 
     def close(self) -> None:
         self.closed = True
 
 
-class InitialStateStep(BaseStep[NullResult]):
+class InitialStateStep(BaseStep):
     """SEQUENTIAL step that provides initial_state and mutates it during process()."""
 
     outputs = ("main",)
@@ -293,7 +246,6 @@ class InitialStateStep(BaseStep[NullResult]):
 
     def process(
         self, item: Any, state: dict[str, int], emit: Callable[[Any, str], None]
-    ) -> NullResult:
+    ) -> None:
         state["count"] += 1
         emit({"item": item, "count": state["count"]}, "main")
-        return NullResult()

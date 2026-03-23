@@ -4,22 +4,20 @@ from __future__ import annotations
 
 import multiprocessing
 import pickle
-import queue
 from typing import Any
 
 import pytest
 from dummy_steps import (
-    CountResult,
     DummySourceStep,
     ErrorOnItemStep,
     FilterEvenStep,
-    NullResult,
     PassthroughStep,
     TerminalStep,
 )
 
 from task_pipeliner.producers import (
     BaseProducer,
+    ChunkResult,
     ErrorSentinel,
     InputProducer,
     ParallelProducer,
@@ -186,7 +184,6 @@ class TestBaseProducer:
             "input_queue": ctx.Queue(),
             "output_queues": {},
             "stats": StatsCollector(),
-            "result_queue": ctx.Queue(),
         }
         defaults.update(overrides)
         stats: StatsCollector = defaults["stats"]
@@ -231,7 +228,6 @@ class TestBaseProducer:
         step = PassthroughStep()
         in_q: multiprocessing.Queue[object] = ctx.Queue()
         out_q: multiprocessing.Queue[object] = ctx.Queue()
-        result_q: multiprocessing.Queue[object] = ctx.Queue()
         stats = StatsCollector()
         stats.register("PassthroughStep")
         state = {"key": "value"}
@@ -244,7 +240,6 @@ class TestBaseProducer:
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-            result_queue=result_q,
             state=state,
             next_state_setter=setter,
         )
@@ -252,7 +247,6 @@ class TestBaseProducer:
         assert producer.input_queue is in_q
         assert producer.output_queues == {"main": [out_q]}
         assert producer.stats is stats
-        assert producer.result_queue is result_q
         assert producer.state is state
         assert producer.next_state_setter is setter
 
@@ -282,18 +276,6 @@ class TestBaseProducer:
         step_stats = producer.stats._stats[producer.step.name]
         assert step_stats.emitted == {"main": 3}
 
-    @pytest.mark.timeout(10)
-    def test_publish_result_puts_result_into_result_queue(self) -> None:
-        ctx = multiprocessing.get_context("spawn")
-        result_q: multiprocessing.Queue[object] = ctx.Queue()
-
-        producer = self._make_producer(result_queue=result_q)
-        result = NullResult()
-        producer._publish_result(result)
-
-        received = result_q.get(timeout=2)
-        assert isinstance(received, NullResult)
-
 
 # ---------------------------------------------------------------------------
 # _parallel_worker unit tests
@@ -306,51 +288,40 @@ class TestParallelWorker:
     def test_returns_emitted_items_by_tag(self) -> None:
         """PassthroughStep → emitted items included in return value."""
         step = PassthroughStep()
-        result, processed, errored, emitted_items, proc_ns = _parallel_worker(
-            [1, 2, 3], step, None
-        )
-        assert processed == 3
-        assert errored == 0
-        assert "main" in emitted_items
-        assert sorted(emitted_items["main"]) == [1, 2, 3]
+        chunk_result = _parallel_worker([1, 2, 3], step, None)
+        assert isinstance(chunk_result, ChunkResult)
+        assert chunk_result.processed == 3
+        assert chunk_result.errored == 0
+        assert "main" in chunk_result.emitted
+        assert sorted(chunk_result.emitted["main"]) == [1, 2, 3]
 
     def test_returns_filtered_items_only(self) -> None:
         """FilterEvenStep → only even items in return value."""
         step = FilterEvenStep()
-        result, processed, errored, emitted_items, proc_ns = _parallel_worker(
-            [1, 2, 3, 4, 5], step, None
-        )
-        assert processed == 5
-        assert sorted(emitted_items.get("main", [])) == [2, 4]
+        chunk_result = _parallel_worker([1, 2, 3, 4, 5], step, None)
+        assert chunk_result.processed == 5
+        assert sorted(chunk_result.emitted.get("main", [])) == [2, 4]
 
     def test_returns_empty_on_all_errors(self) -> None:
-        """All items error → emitted_items_by_tag is empty dict."""
+        """All items error → emitted is empty dict."""
         step = ErrorOnItemStep(error_value=-1)
-        result, processed, errored, emitted_items, proc_ns = _parallel_worker(
-            [-1, -1, -1], step, None
-        )
-        assert processed == 0
-        assert errored == 3
-        assert emitted_items == {}
+        chunk_result = _parallel_worker([-1, -1, -1], step, None)
+        assert chunk_result.processed == 0
+        assert chunk_result.errored == 3
+        assert chunk_result.emitted == {}
 
     def test_terminal_step_no_items(self) -> None:
         """TerminalStep (outputs=()) → no items emitted."""
         step = TerminalStep()
-        result, processed, errored, emitted_items, proc_ns = _parallel_worker(
-            [1], step, None
-        )
-        assert processed == 1
-        assert emitted_items == {}
+        chunk_result = _parallel_worker([1], step, None)
+        assert chunk_result.processed == 1
+        assert chunk_result.emitted == {}
 
-    def test_result_accumulation(self) -> None:
-        """FilterEvenStep → CountResult properly accumulated."""
-        step = FilterEvenStep()
-        result, processed, errored, emitted_items, proc_ns = _parallel_worker(
-            list(range(10)), step, None
-        )
-        assert isinstance(result, CountResult)
-        assert result.passed == 5
-        assert result.filtered == 5
+    def test_processing_ns_tracked(self) -> None:
+        """Worker tracks processing time."""
+        step = PassthroughStep()
+        chunk_result = _parallel_worker(list(range(10)), step, None)
+        assert chunk_result.processing_ns > 0
 
 
 # ---------------------------------------------------------------------------
@@ -367,14 +338,13 @@ class TestSequentialProducer:
         items: list[Any],
         *,
         state: Any = None,
-    ) -> tuple[list[Any], Any, StatsCollector]:
+    ) -> tuple[list[Any], StatsCollector]:
         """Helper: feed *items* into a SequentialProducer.run() and return
-        (output_items, result_from_queue, stats).
+        (output_items, stats).
         """
         ctx = multiprocessing.get_context("spawn")
         in_q: multiprocessing.Queue[Any] = ctx.Queue()
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
-        result_q: multiprocessing.Queue[Any] = ctx.Queue()
         stats = StatsCollector()
         stats.register(step.name)
 
@@ -387,7 +357,6 @@ class TestSequentialProducer:
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-            result_queue=result_q,
             state=state,
         )
         # Direct call — no subprocess
@@ -401,19 +370,13 @@ class TestSequentialProducer:
                 break
             collected.append(obj)
 
-        # Get result (may be absent if 0 items processed)
-        try:
-            result = result_q.get(timeout=2)
-        except queue.Empty:
-            result = None
-
-        return collected, result, stats
+        return collected, stats
 
     @pytest.mark.timeout(15)
     @pytest.mark.parametrize("n", [0, 1, 10, 100])
     def test_passthrough_n_items(self, n: int) -> None:
         items = list(range(n))
-        collected, result, stats = self._run_sequential(PassthroughStep(), items)
+        collected, stats = self._run_sequential(PassthroughStep(), items)
         assert collected == items
         step_stats = stats._stats["PassthroughStep"]
         assert step_stats.processed == n
@@ -425,7 +388,7 @@ class TestSequentialProducer:
     @pytest.mark.timeout(15)
     def test_filter_even_step(self) -> None:
         items = list(range(10))
-        collected, result, stats = self._run_sequential(FilterEvenStep(), items)
+        collected, stats = self._run_sequential(FilterEvenStep(), items)
         assert collected == [0, 2, 4, 6, 8]
         assert all(x % 2 == 0 for x in collected)
 
@@ -435,7 +398,6 @@ class TestSequentialProducer:
         ctx = multiprocessing.get_context("spawn")
         in_q: multiprocessing.Queue[Any] = ctx.Queue()
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
-        result_q: multiprocessing.Queue[Any] = ctx.Queue()
         stats = StatsCollector()
         stats.register("PassthroughStep")
 
@@ -446,7 +408,6 @@ class TestSequentialProducer:
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-            result_queue=result_q,
         )
         producer.run()
 
@@ -454,18 +415,9 @@ class TestSequentialProducer:
         assert is_sentinel(obj)
 
     @pytest.mark.timeout(15)
-    def test_result_queue_receives_count_result(self) -> None:
-        items = list(range(10))
-        collected, result, stats = self._run_sequential(FilterEvenStep(), items)
-        assert isinstance(result, CountResult)
-        assert result.passed + result.filtered == 10
-        assert result.passed == 5
-        assert result.filtered == 5
-
-    @pytest.mark.timeout(15)
     def test_stats_processed_and_emitted(self) -> None:
         items = list(range(20))
-        collected, result, stats = self._run_sequential(FilterEvenStep(), items)
+        collected, stats = self._run_sequential(FilterEvenStep(), items)
         step_stats = stats._stats["FilterEvenStep"]
         assert step_stats.processed == 20
         assert step_stats.emitted == {"main": len(collected)}
@@ -475,7 +427,7 @@ class TestSequentialProducer:
         """Items that raise in process() are skipped; errored stat incremented."""
         # ErrorOnItemStep raises on error_value=-1, emits everything else
         items = [1, 2, -1, 3, -1, 4]
-        collected, result, stats = self._run_sequential(ErrorOnItemStep(error_value=-1), items)
+        collected, stats = self._run_sequential(ErrorOnItemStep(error_value=-1), items)
         # -1 항목 2개는 emit되지 않아야 함
         assert collected == [1, 2, 3, 4]
         step_stats = stats._stats["ErrorOnItemStep"]
@@ -484,21 +436,11 @@ class TestSequentialProducer:
         assert step_stats.emitted == {"main": 4}
 
     @pytest.mark.timeout(15)
-    def test_error_does_not_prevent_result_publish(self) -> None:
-        """Even when some items error, accumulated result is still published."""
-        items = [1, -1, 2, -1, 3]
-        collected, result, stats = self._run_sequential(ErrorOnItemStep(error_value=-1), items)
-        # 성공한 3개의 NullResult가 merge되어 publish됨
-        assert isinstance(result, NullResult)
-        assert len(collected) == 3
-
-    @pytest.mark.timeout(15)
     def test_all_items_error_still_sends_sentinel(self) -> None:
-        """If every item errors, sentinel is still sent and no result published."""
+        """If every item errors, sentinel is still sent."""
         ctx = multiprocessing.get_context("spawn")
         in_q: multiprocessing.Queue[Any] = ctx.Queue()
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
-        result_q: multiprocessing.Queue[Any] = ctx.Queue()
         stats = StatsCollector()
         step = ErrorOnItemStep(error_value=-1)
         stats.register(step.name)
@@ -513,31 +455,22 @@ class TestSequentialProducer:
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-            result_queue=result_q,
         )
         producer.run()
 
         # sentinel은 반드시 전파됨
         obj = out_q.get(timeout=2)
         assert is_sentinel(obj)
-        # 성공 항목 없으므로 result는 publish 안 됨
-        with pytest.raises(queue.Empty):
-            result_q.get(timeout=0.5)
         assert stats._stats[step.name].errored == 5
 
     @pytest.mark.timeout(15)
-    def test_mixed_filter_and_error_result_merge(self) -> None:
-        """FilterEvenStep + error items: result merge reflects only successful processing."""
-        # FilterEvenStep은 짝수만 emit, 홀수는 filtered로 카운트
-        # 하지만 FilterEvenStep은 에러를 안 내니까, ErrorOnItemStep과 다르게 쓴다.
-        # 여기서는 10개 중 5개 짝수, 5개 홀수 → merge 결과 확인
+    def test_filter_even_stats(self) -> None:
+        """FilterEvenStep with 10 items: 5 emitted, 10 processed."""
         items = list(range(10))
-        collected, result, stats = self._run_sequential(FilterEvenStep(), items)
-        assert isinstance(result, CountResult)
-        # merge가 10번의 process() 결과를 정확히 누적했는지
-        assert result.passed == 5
-        assert result.filtered == 5
-        assert result.passed + result.filtered == len(items)
+        collected, stats = self._run_sequential(FilterEvenStep(), items)
+        step_stats = stats._stats["FilterEvenStep"]
+        assert step_stats.processed == 10
+        assert step_stats.emitted == {"main": 5}
 
 
 # ---------------------------------------------------------------------------
@@ -556,14 +489,13 @@ class TestParallelProducer:
         workers: int = 2,
         chunk_size: int = 10,
         state: Any = None,
-    ) -> tuple[list[Any], Any, StatsCollector]:
+    ) -> tuple[list[Any], StatsCollector]:
         """Helper: feed *items* into a ParallelProducer.run() and return
-        (output_items, result_from_queue, stats).
+        (output_items, stats).
         """
         ctx = multiprocessing.get_context("spawn")
         in_q: multiprocessing.Queue[Any] = ctx.Queue()
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
-        result_q: multiprocessing.Queue[Any] = ctx.Queue()
         stats = StatsCollector()
         stats.register(step.name)
 
@@ -576,7 +508,6 @@ class TestParallelProducer:
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-            result_queue=result_q,
             state=state,
             workers=workers,
             chunk_size=chunk_size,
@@ -592,26 +523,20 @@ class TestParallelProducer:
                 break
             collected.append(obj)
 
-        # Get result (may be absent if 0 items processed)
-        try:
-            result = result_q.get(timeout=5)
-        except queue.Empty:
-            result = None
-
-        return collected, result, stats
+        return collected, stats
 
     @pytest.mark.timeout(30)
     @pytest.mark.parametrize("workers,n", [(1, 50), (2, 50), (4, 100)])
     def test_passthrough_item_count(self, workers: int, n: int) -> None:
         items = list(range(n))
-        collected, result, stats = self._run_parallel(PassthroughStep(), items, workers=workers)
+        collected, stats = self._run_parallel(PassthroughStep(), items, workers=workers)
         assert sorted(collected) == items
 
     @pytest.mark.timeout(30)
     def test_filter_even_same_result_regardless_of_workers(self) -> None:
         items = list(range(20))
-        collected_1, _, _ = self._run_parallel(FilterEvenStep(), items, workers=1)
-        collected_4, _, _ = self._run_parallel(FilterEvenStep(), items, workers=4)
+        collected_1, _ = self._run_parallel(FilterEvenStep(), items, workers=1)
+        collected_4, _ = self._run_parallel(FilterEvenStep(), items, workers=4)
         assert sorted(collected_1) == sorted(collected_4)
         assert all(x % 2 == 0 for x in collected_1)
 
@@ -620,7 +545,6 @@ class TestParallelProducer:
         ctx = multiprocessing.get_context("spawn")
         in_q: multiprocessing.Queue[Any] = ctx.Queue()
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
-        result_q: multiprocessing.Queue[Any] = ctx.Queue()
         stats = StatsCollector()
         stats.register("PassthroughStep")
 
@@ -631,7 +555,6 @@ class TestParallelProducer:
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-            result_queue=result_q,
             workers=2,
         )
         producer.run()
@@ -640,22 +563,20 @@ class TestParallelProducer:
         assert is_sentinel(obj)
 
     @pytest.mark.timeout(30)
-    def test_result_queue_count_result(self) -> None:
+    def test_filter_even_stats(self) -> None:
         items = list(range(20))
-        collected, result, stats = self._run_parallel(FilterEvenStep(), items, workers=2)
-        assert isinstance(result, CountResult)
-        assert result.passed + result.filtered == 20
-        assert result.passed == 10
-        assert result.filtered == 10
+        collected, stats = self._run_parallel(FilterEvenStep(), items, workers=2)
+        step_stats = stats._stats["FilterEvenStep"]
+        assert step_stats.processed == 20
+        assert step_stats.emitted == {"main": 10}
 
     @pytest.mark.timeout(30)
-    def test_error_items_skipped_result_still_published(self) -> None:
+    def test_error_items_skipped(self) -> None:
         items = [1, 2, -1, 3, -1, 4, 5, 6]
-        collected, result, stats = self._run_parallel(
+        collected, stats = self._run_parallel(
             ErrorOnItemStep(error_value=-1), items, workers=2
         )
         assert sorted(collected) == [1, 2, 3, 4, 5, 6]
-        assert isinstance(result, NullResult)
 
 
 # ---------------------------------------------------------------------------
@@ -682,7 +603,6 @@ class TestTaggedEmitRouting:
             input_queue=ctx.Queue(),
             output_queues={"main": [q_main], "other": [q_other]},
             stats=stats,
-            result_queue=ctx.Queue(),
         )
         emit = producer._make_emit()
         emit("hello", "main")
@@ -705,7 +625,6 @@ class TestTaggedEmitRouting:
             input_queue=ctx.Queue(),
             output_queues={"main": [q_main]},
             stats=stats,
-            result_queue=ctx.Queue(),
         )
         emit = producer._make_emit()
         emit("hello", "nonexistent")
@@ -728,7 +647,6 @@ class TestTaggedEmitRouting:
             input_queue=ctx.Queue(),
             output_queues={},
             stats=stats,
-            result_queue=ctx.Queue(),
         )
         emit = producer._make_emit()
 
@@ -751,7 +669,6 @@ class TestTaggedEmitRouting:
             input_queue=ctx.Queue(),
             output_queues={"main": [q1, q2]},
             stats=stats,
-            result_queue=ctx.Queue(),
         )
         emit = producer._make_emit()
         emit("data", "main")
@@ -775,7 +692,6 @@ class TestTaggedEmitRouting:
             input_queue=ctx.Queue(),
             output_queues={"kept": [q1], "removed": [q2]},
             stats=stats,
-            result_queue=ctx.Queue(),
         )
         producer._send_sentinel()
 
@@ -797,7 +713,6 @@ class TestTaggedEmitRouting:
             input_queue=ctx.Queue(),
             output_queues={"tag_a": [shared_q], "tag_b": [shared_q]},
             stats=stats,
-            result_queue=ctx.Queue(),
         )
         producer._send_sentinel()
 

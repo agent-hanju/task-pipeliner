@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Self
+from typing import Any
 
 import pytest
 
-from task_pipeliner.base import BaseResult, BaseStep, StepType
+from task_pipeliner.base import BaseStep, StepType
 from task_pipeliner.config import (
     ExecutionConfig,
     PipelineConfig,
@@ -67,72 +66,11 @@ class TestConfigValidationError:
 # ── W-02: base ────────────────────────────────────────────────────
 
 
-# --- Dummy BaseResult implementations for testing ---
-
-
-@dataclass
-class _DummyResult(BaseResult):
-    """Concrete BaseResult for testing merge/write."""
-
-    count: int = 0
-
-    def merge(self, other: Self) -> Self:
-        return type(self)(count=self.count + other.count)  # type: ignore[return-value]
-
-    def write(self, output_dir: Path, step_name: str = "") -> None:
-        (output_dir / "dummy_result.txt").write_text(f"count={self.count}")
-
-
-@dataclass
-class _NoOpResult(BaseResult):
-    """Minimal no-op BaseResult."""
-
-    def merge(self, other: Self) -> Self:
-        return self
-
-    def write(self, output_dir: Path, step_name: str = "") -> None:
-        pass
-
-
 class TestStepType:
     def test_enum_values(self) -> None:
         assert StepType.PARALLEL.value == "parallel"
         assert StepType.SEQUENTIAL.value == "sequential"
         assert StepType.SOURCE.value == "source"
-
-
-class TestBaseResult:
-    def test_cannot_instantiate_directly(self) -> None:
-        with pytest.raises(TypeError):
-            BaseResult()  # type: ignore[abstract]
-
-    def test_merge_combines_results(self) -> None:
-        a = _DummyResult(count=3)
-        b = _DummyResult(count=5)
-        merged = a.merge(b)
-        assert merged.count == 8
-
-    def test_merge_is_associative(self) -> None:
-        a = _DummyResult(count=1)
-        b = _DummyResult(count=2)
-        c = _DummyResult(count=3)
-        assert a.merge(b).merge(c).count == a.merge(b.merge(c)).count
-
-    def test_write_creates_file(self, tmp_path: Path) -> None:
-        result = _DummyResult(count=42)
-        result.write(tmp_path)
-        out_file = tmp_path / "dummy_result.txt"
-        assert out_file.exists()
-        assert out_file.read_text() == "count=42"
-
-    def test_noop_result_merge_returns_self(self) -> None:
-        a = _NoOpResult()
-        b = _NoOpResult()
-        assert a.merge(b) is a
-
-    def test_noop_result_write_is_noop(self, tmp_path: Path) -> None:
-        _NoOpResult().write(tmp_path)
-        assert list(tmp_path.iterdir()) == []
 
 
 class TestBaseStep:
@@ -141,24 +79,24 @@ class TestBaseStep:
             BaseStep()  # type: ignore[abstract]
 
     def test_name_defaults_to_class_name(self) -> None:
-        class MyStep(BaseStep[_NoOpResult]):
+        class MyStep(BaseStep):
             step_type = StepType.PARALLEL
 
-            def process(self, item: Any, state: Any, emit: Any) -> _NoOpResult:
-                return _NoOpResult()
+            def process(self, item: Any, state: Any, emit: Any) -> None:
+                pass
 
         assert MyStep().name == "MyStep"
 
     def test_name_override(self) -> None:
-        class Custom(BaseStep[_NoOpResult]):
+        class Custom(BaseStep):
             step_type = StepType.PARALLEL
 
             @property
             def name(self) -> str:
                 return "custom_name"
 
-            def process(self, item: Any, state: Any, emit: Any) -> _NoOpResult:
-                return _NoOpResult()
+            def process(self, item: Any, state: Any, emit: Any) -> None:
+                pass
 
         assert Custom().name == "custom_name"
 
@@ -166,20 +104,20 @@ class TestBaseStep:
         """Subclass without step_type cannot be instantiated."""
         with pytest.raises(TypeError):
 
-            class Bad(BaseStep[_NoOpResult]):
-                def process(self, item: Any, state: Any, emit: Any) -> _NoOpResult:
-                    return _NoOpResult()
+            class Bad(BaseStep):
+                def process(self, item: Any, state: Any, emit: Any) -> None:
+                    pass
 
             Bad()  # type: ignore[abstract]
 
     def test_outputs_defaults_to_empty_tuple(self) -> None:
         """BaseStep.outputs defaults to () — terminal step."""
 
-        class TerminalStep(BaseStep[_NoOpResult]):
+        class TerminalStep(BaseStep):
             step_type = StepType.PARALLEL
 
-            def process(self, item: Any, state: Any, emit: Any) -> _NoOpResult:
-                return _NoOpResult()
+            def process(self, item: Any, state: Any, emit: Any) -> None:
+                pass
 
         assert TerminalStep.outputs == ()
         assert TerminalStep().outputs == ()
@@ -187,13 +125,12 @@ class TestBaseStep:
     def test_outputs_can_be_declared(self) -> None:
         """Subclass can declare named outputs."""
 
-        class BranchStep(BaseStep[_NoOpResult]):
+        class BranchStep(BaseStep):
             step_type = StepType.PARALLEL
             outputs = ("kept", "removed")
 
-            def process(self, item: Any, state: Any, emit: Any) -> _NoOpResult:
+            def process(self, item: Any, state: Any, emit: Any) -> None:
                 emit(item, "kept")
-                return _NoOpResult()
 
         assert BranchStep.outputs == ("kept", "removed")
 
@@ -201,27 +138,25 @@ class TestBaseStep:
         """emit(item, tag) — tag is required second argument."""
         collected: list[tuple[Any, str]] = []
 
-        class TaggedStep(BaseStep[_DummyResult]):
+        class TaggedStep(BaseStep):
             step_type = StepType.PARALLEL
             outputs = ("out",)
 
-            def process(self, item: Any, state: Any, emit: Any) -> _DummyResult:
+            def process(self, item: Any, state: Any, emit: Any) -> None:
                 emit(item, "out")
-                return _DummyResult(count=1)
 
         step = TaggedStep()
-        result = step.process("hello", None, lambda i, t: collected.append((i, t)))
+        step.process("hello", None, lambda i, t: collected.append((i, t)))
         assert collected == [("hello", "out")]
-        assert result.count == 1
 
     def test_items_raises_not_implemented_by_default(self) -> None:
         """Non-SOURCE steps should raise NotImplementedError on items()."""
 
-        class NormalStep(BaseStep[_NoOpResult]):
+        class NormalStep(BaseStep):
             step_type = StepType.PARALLEL
 
-            def process(self, item: Any, state: Any, emit: Any) -> _NoOpResult:
-                return _NoOpResult()
+            def process(self, item: Any, state: Any, emit: Any) -> None:
+                pass
 
         step = NormalStep()
         with pytest.raises(NotImplementedError):
@@ -230,26 +165,26 @@ class TestBaseStep:
     def test_initial_state_defaults_to_none(self) -> None:
         """BaseStep.initial_state defaults to None."""
 
-        class SimpleStep(BaseStep[_NoOpResult]):
+        class SimpleStep(BaseStep):
             step_type = StepType.PARALLEL
 
-            def process(self, item: Any, state: Any, emit: Any) -> _NoOpResult:
-                return _NoOpResult()
+            def process(self, item: Any, state: Any, emit: Any) -> None:
+                pass
 
         assert SimpleStep().initial_state is None
 
     def test_initial_state_override(self) -> None:
         """Subclass can override initial_state to return custom state."""
 
-        class StatefulStep(BaseStep[_NoOpResult]):
+        class StatefulStep(BaseStep):
             step_type = StepType.SEQUENTIAL
 
             @property
             def initial_state(self) -> dict[str, int]:
                 return {"count": 0}
 
-            def process(self, item: Any, state: Any, emit: Any) -> _NoOpResult:
-                return _NoOpResult()
+            def process(self, item: Any, state: Any, emit: Any) -> None:
+                pass
 
         step = StatefulStep()
         assert step.initial_state == {"count": 0}
@@ -259,11 +194,11 @@ class TestBaseStep:
     def test_open_is_noop_by_default(self) -> None:
         """open() should be callable without error (no-op)."""
 
-        class NormalStep(BaseStep[_NoOpResult]):
+        class NormalStep(BaseStep):
             step_type = StepType.PARALLEL
 
-            def process(self, item: Any, state: Any, emit: Any) -> _NoOpResult:
-                return _NoOpResult()
+            def process(self, item: Any, state: Any, emit: Any) -> None:
+                pass
 
         step = NormalStep()
         step.open()  # should not raise
@@ -271,11 +206,11 @@ class TestBaseStep:
     def test_close_is_noop_by_default(self) -> None:
         """close() should be callable without error (no-op)."""
 
-        class NormalStep(BaseStep[_NoOpResult]):
+        class NormalStep(BaseStep):
             step_type = StepType.PARALLEL
 
-            def process(self, item: Any, state: Any, emit: Any) -> _NoOpResult:
-                return _NoOpResult()
+            def process(self, item: Any, state: Any, emit: Any) -> None:
+                pass
 
         step = NormalStep()
         step.close()  # should not raise
@@ -283,7 +218,7 @@ class TestBaseStep:
     def test_open_close_symmetry(self) -> None:
         """Subclass can override both open() and close() for resource management."""
 
-        class ResourceStep(BaseStep[_NoOpResult]):
+        class ResourceStep(BaseStep):
             step_type = StepType.SEQUENTIAL
 
             def __init__(self) -> None:
@@ -293,8 +228,8 @@ class TestBaseStep:
             def open(self) -> None:
                 self.opened = True
 
-            def process(self, item: Any, state: Any, emit: Any) -> _NoOpResult:
-                return _NoOpResult()
+            def process(self, item: Any, state: Any, emit: Any) -> None:
+                pass
 
             def close(self) -> None:
                 self.closed = True

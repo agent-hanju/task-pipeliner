@@ -1,6 +1,6 @@
 """task-pipeliner: configurable data processing pipeline framework."""
 
-from task_pipeliner.base import BaseResult, BaseStep, StepType
+from task_pipeliner.base import BaseStep, StepType
 from task_pipeliner.exceptions import (
     ConfigValidationError,
     PipelineError,
@@ -12,7 +12,6 @@ from task_pipeliner.producers import InputProducer, ParallelProducer, Sequential
 __all__ = [
     "Pipeline",
     "BaseStep",
-    "BaseResult",
     "StepType",
     "InputProducer",
     "ParallelProducer",

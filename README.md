@@ -32,27 +32,13 @@ python -m venv .venv
 ```python
 # steps.py
 from collections.abc import Callable, Generator
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from task_pipeliner import BaseResult, BaseStep, StepType
+from task_pipeliner import BaseStep, StepType
 
 
-@dataclass
-class CountResult(BaseResult):
-    kept: int = 0
-    removed: int = 0
-
-    def merge(self, other: "CountResult") -> "CountResult":
-        return CountResult(kept=self.kept + other.kept, removed=self.removed + other.removed)
-
-    def write(self, output_dir: Path, step_name: str = "") -> None:
-        import json
-        (output_dir / "summary.json").write_text(json.dumps({"kept": self.kept, "removed": self.removed}))
-
-
-class LoaderStep(BaseStep[CountResult]):
+class LoaderStep(BaseStep):
     """SOURCE step: reads lines from text files."""
     outputs = ("main",)
 
@@ -69,11 +55,11 @@ class LoaderStep(BaseStep[CountResult]):
                 for line in f:
                     yield {"text": line.strip()}
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> CountResult:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         raise NotImplementedError
 
 
-class FilterStep(BaseStep[CountResult]):
+class FilterStep(BaseStep):
     """PARALLEL step: filters items by text length."""
     outputs = ("kept", "removed")
 
@@ -84,15 +70,14 @@ class FilterStep(BaseStep[CountResult]):
     def __init__(self, min_length: int = 10, **_: Any) -> None:
         self._min_length = min_length
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> CountResult:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         if len(item.get("text", "")) >= self._min_length:
             emit(item, "kept")
-            return CountResult(kept=1)
-        emit(item, "removed")
-        return CountResult(removed=1)
+        else:
+            emit(item, "removed")
 
 
-class WriterStep(BaseStep[CountResult]):
+class WriterStep(BaseStep):
     """SEQUENTIAL terminal step: writes items to a JSONL file."""
     outputs = ()  # terminal — no emit allowed
 
@@ -107,10 +92,9 @@ class WriterStep(BaseStep[CountResult]):
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._fh = open(self._path, "w", encoding="utf-8")
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> CountResult:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         import json
         self._fh.write(json.dumps(item) + "\n")
-        return CountResult(kept=1)
 
     def close(self) -> None:
         self._fh.close()
@@ -187,13 +171,6 @@ __init__(config) → is_ready() gating → open() → process() × N → close()
 ```
 
 > `open()` and `close()` run on the **main process** only. For PARALLEL steps, worker processes receive pickle-restored copies and do not call `open()`.
-
-### BaseResult
-
-Result data objects that accumulate across items and workers:
-
-- `merge(other)` — Combine two results (must be associative).
-- `write(output_dir, step_name="")` — Write final results to files.
 
 ### Pipeline
 
@@ -305,7 +282,7 @@ The `type` field selects which registered class to instantiate. The `name` field
 For two-pass algorithms (build histogram → clean using histogram):
 
 ```python
-class CollectorStep(BaseStep[R]):
+class CollectorStep(BaseStep):
     """Pass 1: Accumulate statistics while forwarding items."""
     step_type = StepType.SEQUENTIAL
     outputs = ("main",)
@@ -313,14 +290,13 @@ class CollectorStep(BaseStep[R]):
     def process(self, item, state, emit):
         self._histogram.update(item)
         emit(item, "main")             # Forward immediately
-        return result
 
     def close(self):
         # After all items processed, dispatch state to gated step (by config name)
         self.set_step_state("cleaner", self._histogram)
 
 
-class CleanerStep(BaseStep[R]):
+class CleanerStep(BaseStep):
     """Pass 2: Process items using collected statistics."""
     step_type = StepType.SEQUENTIAL
     outputs = ("kept",)
@@ -331,7 +307,6 @@ class CleanerStep(BaseStep[R]):
     def process(self, item, state, emit):
         cleaned = apply_histogram(item, state)
         emit(cleaned, "kept")
-        return result
 ```
 
 Items queue up in `CleanerStep` while `is_ready()` returns `False`. Once `CollectorStep.close()` dispatches state via `set_step_state()`, the gated step unblocks and processes all queued items.
@@ -397,19 +372,17 @@ task-pipeliner batch jobs.json
 
 ### Step-by-step
 
-1. **Define a Result class** extending `BaseResult` with `merge()` and `write()`.
-
-2. **Define Step classes** at module level (required for spawn-mode pickle):
+1. **Define Step classes** at module level (required for spawn-mode pickle):
    - `SOURCE` step: implement `items()` to yield input data.
    - `PARALLEL` steps: stateless `process()` for CPU-bound work.
    - `SEQUENTIAL` steps: stateful `process()` for dedup, aggregation, I/O.
    - Terminal steps: set `outputs = ()` and don't call `emit()`.
 
-3. **Write `pipeline_config.yaml`**: define the step DAG with `type`, `outputs`, and step-specific params.
+2. **Write `pipeline_config.yaml`**: define the step DAG with `type`, `outputs`, and step-specific params.
 
-4. **Write `run.py`**: register steps via `Pipeline.register_all()` and call `pipeline.run()`.
+3. **Write `run.py`**: register steps via `Pipeline.register_all()` and call `pipeline.run()`.
 
-5. **Run and inspect**: check `output/stats.json`, `output/pipeline.log`, `output/progress.log`.
+4. **Run and inspect**: check `output/stats.json`, `output/pipeline.log`, `output/progress.log`.
 
 ### Constraints
 
@@ -422,8 +395,7 @@ task-pipeliner batch jobs.json
 | Class | Module | Description |
 |-------|--------|-------------|
 | `Pipeline` | `task_pipeliner` | Register steps, run pipeline |
-| `BaseStep[R]` | `task_pipeliner` | Abstract base for all steps |
-| `BaseResult` | `task_pipeliner` | Abstract base for result data |
+| `BaseStep` | `task_pipeliner` | Abstract base for all steps |
 | `StepType` | `task_pipeliner` | Enum: `SOURCE`, `PARALLEL`, `SEQUENTIAL` |
 | `PipelineError` | `task_pipeliner` | Base exception |
 | `StepRegistrationError` | `task_pipeliner` | Duplicate/unpicklable registration |

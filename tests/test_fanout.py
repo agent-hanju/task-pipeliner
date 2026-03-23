@@ -23,7 +23,7 @@ class TestFanOut:
         in_q: multiprocessing.Queue[Any] = ctx.Queue()
         out_a: multiprocessing.Queue[Any] = ctx.Queue()
         out_b: multiprocessing.Queue[Any] = ctx.Queue()
-        result_q: multiprocessing.Queue[Any] = ctx.Queue()
+
         stats = StatsCollector()
         stats.register("PassthroughStep")
 
@@ -37,7 +37,7 @@ class TestFanOut:
             input_queue=in_q,
             output_queues={"main": [out_a, out_b]},
             stats=stats,
-            result_queue=result_q,
+
         )
         producer.run()
 
@@ -68,7 +68,7 @@ class TestStateEvent:
         ctx = multiprocessing.get_context("spawn")
         in_q: multiprocessing.Queue[Any] = ctx.Queue()
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
-        result_q: multiprocessing.Queue[Any] = ctx.Queue()
+
         stats = StatsCollector()
         stats.register("PassthroughStep")
 
@@ -83,7 +83,7 @@ class TestStateEvent:
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-            result_queue=result_q,
+
             ready_events=[evt],
         )
 
@@ -108,7 +108,7 @@ class TestStateEvent:
         ctx = multiprocessing.get_context("spawn")
         in_q: multiprocessing.Queue[Any] = ctx.Queue()
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
-        result_q: multiprocessing.Queue[Any] = ctx.Queue()
+
         stats = StatsCollector()
         stats.register("PassthroughStep")
 
@@ -123,7 +123,7 @@ class TestStateEvent:
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-            result_queue=result_q,
+
             ready_events=[evt_a, evt_b],
         )
 
@@ -162,10 +162,6 @@ class TestFanOutEndToEnd:
         queue_b: multiprocessing.Queue[Any] = ctx.Queue()
         out_a: multiprocessing.Queue[Any] = ctx.Queue()
         out_b: multiprocessing.Queue[Any] = ctx.Queue()
-        result_src: multiprocessing.Queue[Any] = ctx.Queue()
-        result_qa: multiprocessing.Queue[Any] = ctx.Queue()
-        result_qb: multiprocessing.Queue[Any] = ctx.Queue()
-
         stats = StatsCollector()
         stats.register("PassthroughStep")
         stats.register("StateAwareStep")
@@ -184,7 +180,8 @@ class TestFanOutEndToEnd:
             input_queue=source_q,
             output_queues={"main": [queue_a, queue_b]},
             stats=stats,
-            result_queue=result_src,
+
+
         )
 
         # Queue A: StateAwareStep, blocked until evt
@@ -193,7 +190,8 @@ class TestFanOutEndToEnd:
             input_queue=queue_a,
             output_queues={"main": [out_a]},
             stats=stats,
-            result_queue=result_qa,
+
+
             state=state_a,
             ready_events=[evt],
         )
@@ -207,7 +205,8 @@ class TestFanOutEndToEnd:
             input_queue=queue_b,
             output_queues={"main": [out_b]},
             stats=stats,
-            result_queue=result_qb,
+
+
             next_state_setter=on_b_done,
         )
 
