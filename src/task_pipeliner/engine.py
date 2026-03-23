@@ -437,7 +437,9 @@ class PipelineEngine:
                 t.start()
 
             # 스레드 종료 대기
-            join_timeout = 5 if shutdown_event.is_set() else 30
+            # 정상 실행: 모든 스레드가 끝날 때까지 무제한 대기
+            # 시그널 종료: 5초 타임아웃 후 강제 sentinel 주입
+            join_timeout = 5 if shutdown_event.is_set() else None
             feeder.join(timeout=join_timeout)
             for t in merger_threads:
                 t.join(timeout=join_timeout)
