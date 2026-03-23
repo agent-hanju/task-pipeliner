@@ -104,9 +104,10 @@ class InputProducer:
 # ---------------------------------------------------------------------------
 
 
-class BaseProducer(ABC, multiprocessing.Process):
+class BaseProducer(ABC):
     """Abstract base for queue-consuming step executors.
 
+    Runs as a thread in the main process (not a subprocess).
     Provides shared infrastructure: emit callback, sentinel propagation,
     result publishing, and ready-event synchronisation.
     """
@@ -129,7 +130,6 @@ class BaseProducer(ABC, multiprocessing.Process):
             step.name,
             len(output_queues),
         )
-        super().__init__()
         self.step = step
         self.input_queue = input_queue
         self.output_queues = output_queues
