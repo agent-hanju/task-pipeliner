@@ -5,8 +5,20 @@ A configurable Python data processing pipeline framework with mixed parallel/seq
 ## Installation
 
 ```bash
-# From source
-git clone https://github.com/your-org/task-pipeliner.git
+# As a dependency (in your pyproject.toml)
+pip install "task-pipeliner @ git+https://github.com/agent-hanju/task-pipeliner.git@v0.1.0"
+```
+
+```toml
+# pyproject.toml
+dependencies = [
+    "task-pipeliner @ git+https://github.com/agent-hanju/task-pipeliner.git@v0.1.0",
+]
+```
+
+```bash
+# From source (for development)
+git clone https://github.com/agent-hanju/task-pipeliner.git
 cd task-pipeliner
 python -m venv .venv
 .venv/Scripts/pip install ".[dev]"   # Windows
@@ -35,7 +47,7 @@ class CountResult(BaseResult):
     def merge(self, other: "CountResult") -> "CountResult":
         return CountResult(kept=self.kept + other.kept, removed=self.removed + other.removed)
 
-    def write(self, output_dir: Path) -> None:
+    def write(self, output_dir: Path, step_name: str = "") -> None:
         import json
         (output_dir / "summary.json").write_text(json.dumps({"kept": self.kept, "removed": self.removed}))
 
@@ -181,7 +193,7 @@ __init__(config) → is_ready() gating → open() → process() × N → close()
 Result data objects that accumulate across items and workers:
 
 - `merge(other)` — Combine two results (must be associative).
-- `write(output_dir)` — Write final results to files.
+- `write(output_dir, step_name="")` — Write final results to files.
 
 ### Pipeline
 

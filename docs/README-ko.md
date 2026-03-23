@@ -5,8 +5,20 @@
 ## 설치
 
 ```bash
-# 소스에서 설치
-git clone https://github.com/your-org/task-pipeliner.git
+# 의존성으로 설치 (다른 프로젝트의 pyproject.toml에 추가)
+pip install "task-pipeliner @ git+https://github.com/agent-hanju/task-pipeliner.git@v0.1.0"
+```
+
+```toml
+# pyproject.toml
+dependencies = [
+    "task-pipeliner @ git+https://github.com/agent-hanju/task-pipeliner.git@v0.1.0",
+]
+```
+
+```bash
+# 소스에서 설치 (개발용)
+git clone https://github.com/agent-hanju/task-pipeliner.git
 cd task-pipeliner
 python -m venv .venv
 .venv/Scripts/pip install ".[dev]"   # Windows
@@ -35,7 +47,7 @@ class CountResult(BaseResult):
     def merge(self, other: "CountResult") -> "CountResult":
         return CountResult(kept=self.kept + other.kept, removed=self.removed + other.removed)
 
-    def write(self, output_dir: Path) -> None:
+    def write(self, output_dir: Path, step_name: str = "") -> None:
         import json
         (output_dir / "summary.json").write_text(json.dumps({"kept": self.kept, "removed": self.removed}))
 
@@ -181,7 +193,7 @@ __init__(config) → is_ready() 게이팅 → open() → process() × N → clos
 아이템과 워커에 걸쳐 누적되는 결과 데이터 객체:
 
 - `merge(other)` — 두 결과를 합침 (결합법칙 필수).
-- `write(output_dir)` — 최종 결과를 파일로 기록.
+- `write(output_dir, step_name="")` — 최종 결과를 파일로 기록.
 
 ### Pipeline
 
