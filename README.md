@@ -208,10 +208,11 @@ Pipeline topology is defined in YAML:
 
 ```yaml
 pipeline:
-  - type: step_name          # Matches registered step name
+  - type: step_name          # Matches registered step class name
+    name: instance_name       # Optional instance name (defaults to type)
     enabled: true             # Optional (default: true). Set false to skip.
     param1: value1            # Extra fields → Step.__init__(**kwargs)
-    outputs:                  # DAG edges: tag → downstream step(s)
+    outputs:                  # DAG edges: tag → downstream step name(s)
       kept: next_step         # Single target
       removed:                # Multiple targets (fan-out)
         - step_a
@@ -226,7 +227,8 @@ execution:
 ### Config Rules
 
 - First step must be `SOURCE`. No `SOURCE` steps after the first.
-- `outputs` tags must reference known step types.
+- Each step `name` must be unique. When omitted, defaults to `type`.
+- `outputs` tags must reference step names (not types).
 - Steps with `outputs = ()` are terminal (calling `emit()` raises `RuntimeError`).
 - Extra config fields are passed as `**kwargs` to `Step.__init__()`.
 
@@ -252,6 +254,40 @@ execution:
   outputs: { done: writer }   # Both feed into writer
 ```
 
+### Multiple Instances of the Same Step Type
+
+Use `name` to create multiple instances of the same registered step type with different configs:
+
+```yaml
+pipeline:
+  - type: source
+    items: ["./data/input.jsonl"]
+    outputs:
+      main: strict_filter
+
+  - type: quality_filter
+    name: strict_filter        # Unique instance name
+    min_score: 0.9
+    outputs:
+      kept: good_writer
+
+  - type: quality_filter
+    name: loose_filter         # Same type, different config
+    min_score: 0.3
+    outputs:
+      kept: bad_writer
+
+  - type: writer
+    name: good_writer
+    output_path: ./kept.jsonl
+
+  - type: writer
+    name: bad_writer
+    output_path: ./removed.jsonl
+```
+
+The `type` field selects which registered class to instantiate. The `name` field (defaulting to `type` when omitted) is the unique identifier used for `outputs` routing, stats tracking, and `set_step_state()` targeting. Existing configs without `name` work unchanged.
+
 ### State Gating
 
 For two-pass algorithms (build histogram → clean using histogram):
@@ -268,8 +304,8 @@ class CollectorStep(BaseStep[R]):
         return result
 
     def close(self):
-        # After all items processed, dispatch state to gated step
-        self.set_step_state("CleanerStep", self._histogram)
+        # After all items processed, dispatch state to gated step (by config name)
+        self.set_step_state("cleaner", self._histogram)
 
 
 class CleanerStep(BaseStep[R]):
@@ -298,9 +334,9 @@ Real-time progress is printed to stderr and written to `progress.log`:
 
 ```
 --- Pipeline Progress (12.3s) -------------------------------------------
-  LoaderStep             372 produced                          [done 1.2s]
-  FilterStep             372 in → 329 kept, 43 removed  1.2ms/item  [done 4.5s]
-  WriterStep              43 in                          0.0ms/item  [idle]
+  loader                 372 produced                          [done 1.2s]
+  filter                 372 in → 329 kept, 43 removed  1.2ms/item  [done 4.5s]
+  writer                  43 in                          0.0ms/item  [idle]
 -------------------------------------------------------------------------
 ```
 
@@ -311,7 +347,7 @@ After completion, `stats.json` in the output directory contains per-step metrics
 ```json
 [
   {
-    "step_name": "FilterStep",
+    "step_name": "filter",
     "processed": 1000,
     "errored": 2,
     "emitted": {"kept": 850, "removed": 148},

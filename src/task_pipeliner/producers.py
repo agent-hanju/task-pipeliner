@@ -266,6 +266,7 @@ class SequentialProducer(BaseProducer):
                     )
                 self.stats.set_state(self.step.name, "idle")
         finally:
+            self._send_sentinel()
             self.step.close()
             if accumulated is not None:
                 self._publish_result(accumulated)
@@ -273,7 +274,6 @@ class SequentialProducer(BaseProducer):
             self.stats.finish(self.step.name)
             if self.next_state_setter is not None:
                 self.next_state_setter(self.state)
-            self._send_sentinel()
             logger.info("producer finished step=%s", self.step.name)
 
 
@@ -468,6 +468,8 @@ class ParallelProducer(BaseProducer):
                             if accumulated is None
                             else accumulated.merge(chunk_result)
                         )
+                # 모든 아이템 처리 완료 → sentinel 먼저 전파
+                self._send_sentinel()
             finally:
                 executor.shutdown(wait=True)
         finally:
@@ -478,5 +480,4 @@ class ParallelProducer(BaseProducer):
             self.stats.finish(self.step.name)
             if self.next_state_setter is not None:
                 self.next_state_setter(self.state)
-            self._send_sentinel()
             logger.info("producer finished step=%s", self.step.name)

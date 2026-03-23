@@ -208,10 +208,11 @@ pipeline.run(config=path_or_config, output_dir=path)
 
 ```yaml
 pipeline:
-  - type: step_name          # 등록된 스텝 이름과 매칭
+  - type: step_name          # 등록된 스텝 클래스 이름과 매칭
+    name: instance_name       # 선택. 인스턴스 이름 (기본: type과 동일)
     enabled: true             # 선택 (기본: true). false면 스킵.
     param1: value1            # 추가 필드 → Step.__init__(**kwargs)
-    outputs:                  # DAG 엣지: tag → 다운스트림 스텝
+    outputs:                  # DAG 엣지: tag → 다운스트림 스텝 name
       kept: next_step         # 단일 타겟
       removed:                # 복수 타겟 (fan-out)
         - step_a
@@ -226,7 +227,8 @@ execution:
 ### 설정 규칙
 
 - 첫 번째 스텝은 반드시 `SOURCE`. 이후에는 `SOURCE` 불가.
-- `outputs` 태그는 알려진 스텝 타입을 참조해야 함.
+- 각 스텝의 `name`은 고유해야 함. 생략 시 `type` 값이 `name`으로 사용됨.
+- `outputs` 태그는 스텝 name을 참조해야 함 (type이 아님).
 - `outputs = ()` 스텝은 터미널 (`emit()` 호출 시 `RuntimeError`).
 - 추가 설정 필드는 `Step.__init__(**kwargs)`로 전달됨.
 
@@ -252,6 +254,40 @@ execution:
   outputs: { done: writer }   # 둘 다 writer로 입력
 ```
 
+### 같은 타입의 스텝 다중 인스턴스
+
+`name`을 사용하면 같은 등록 타입의 스텝을 서로 다른 설정으로 여러 번 사용할 수 있습니다:
+
+```yaml
+pipeline:
+  - type: source
+    items: ["./data/input.jsonl"]
+    outputs:
+      main: strict_filter
+
+  - type: quality_filter
+    name: strict_filter        # 고유 인스턴스 이름
+    min_score: 0.9
+    outputs:
+      kept: good_writer
+
+  - type: quality_filter
+    name: loose_filter         # 같은 타입, 다른 설정
+    min_score: 0.3
+    outputs:
+      kept: bad_writer
+
+  - type: writer
+    name: good_writer
+    output_path: ./kept.jsonl
+
+  - type: writer
+    name: bad_writer
+    output_path: ./removed.jsonl
+```
+
+`type`은 등록된 클래스를 선택하고, `name`(생략 시 `type`과 동일)은 `outputs` 라우팅, stats 추적, `set_step_state()` 대상 지정에 사용되는 고유 식별자입니다. `name` 없는 기존 설정은 그대로 동작합니다.
+
 ### State 게이팅
 
 2-pass 알고리즘용 (히스토그램 구축 → 히스토그램으로 정제):
@@ -268,8 +304,8 @@ class CollectorStep(BaseStep[R]):
         return result
 
     def close(self):
-        # 모든 아이템 처리 후, 게이트된 스텝에 state 전달
-        self.set_step_state("CleanerStep", self._histogram)
+        # 모든 아이템 처리 후, 게이트된 스텝에 state 전달 (설정의 name 기준)
+        self.set_step_state("cleaner", self._histogram)
 
 
 class CleanerStep(BaseStep[R]):
@@ -298,9 +334,9 @@ class CleanerStep(BaseStep[R]):
 
 ```
 --- Pipeline Progress (12.3s) -------------------------------------------
-  LoaderStep             372 produced                          [done 1.2s]
-  FilterStep             372 in → 329 kept, 43 removed  1.2ms/item  [done 4.5s]
-  WriterStep              43 in                          0.0ms/item  [idle]
+  loader                 372 produced                          [done 1.2s]
+  filter                 372 in → 329 kept, 43 removed  1.2ms/item  [done 4.5s]
+  writer                  43 in                          0.0ms/item  [idle]
 -------------------------------------------------------------------------
 ```
 
@@ -311,7 +347,7 @@ class CleanerStep(BaseStep[R]):
 ```json
 [
   {
-    "step_name": "FilterStep",
+    "step_name": "filter",
     "processed": 1000,
     "errored": 2,
     "emitted": {"kept": 850, "removed": 148},

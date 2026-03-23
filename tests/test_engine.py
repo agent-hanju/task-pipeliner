@@ -105,7 +105,7 @@ class TestPipelineEngine:
             {"source": DummySourceStep, "passthrough": PassthroughStep},
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["PassthroughStep"].processed == 10
+        assert stats._stats["passthrough"].processed == 10
 
     @pytest.mark.timeout(30)
     def test_filter_even_stats(self, tmp_path: Path) -> None:
@@ -118,7 +118,7 @@ class TestPipelineEngine:
             {"source": DummySourceStep, "filter_even": FilterEvenStep},
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["FilterEvenStep"].processed == 10
+        assert stats._stats["filter_even"].processed == 10
 
     @pytest.mark.timeout(30)
     def test_filter_even_result_file(self, tmp_path: Path) -> None:
@@ -154,8 +154,8 @@ class TestPipelineEngine:
             },
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["PassthroughStep"].processed == 10
-        assert stats._stats["FilterEvenStep"].processed == 10
+        assert stats._stats["passthrough"].processed == 10
+        assert stats._stats["filter_even"].processed == 10
 
     @pytest.mark.timeout(30)
     def test_disabled_step_skipped(self, tmp_path: Path) -> None:
@@ -173,8 +173,8 @@ class TestPipelineEngine:
             },
         )
         engine.run(output_dir=tmp_path / "out")
-        assert "PassthroughStep" not in stats._stats
-        assert stats._stats["FilterEvenStep"].processed == 10
+        assert "passthrough" not in stats._stats
+        assert stats._stats["filter_even"].processed == 10
 
     @pytest.mark.timeout(30)
     def test_stats_json_written(self, tmp_path: Path) -> None:
@@ -192,9 +192,9 @@ class TestPipelineEngine:
         assert stats_file.exists()
         data = orjson.loads(stats_file.read_bytes())
         step_names = [d["step_name"] for d in data]
-        assert "DummySourceStep" in step_names
-        assert "PassthroughStep" in step_names
-        pt = next(d for d in data if d["step_name"] == "PassthroughStep")
+        assert "source" in step_names
+        assert "passthrough" in step_names
+        pt = next(d for d in data if d["step_name"] == "passthrough")
         assert pt["processed"] == 5
 
     @pytest.mark.timeout(30)
@@ -208,7 +208,7 @@ class TestPipelineEngine:
             {"source": DummySourceStep, "passthrough": PassthroughStep},
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["PassthroughStep"].processed == 0
+        assert stats._stats["passthrough"].processed == 0
 
     def test_unregistered_step_in_config(self, tmp_path: Path) -> None:
         """Config references unregistered step → StepRegistrationError."""
@@ -298,9 +298,9 @@ class TestPipelineEngineDAG:
             },
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["BranchEvenOddStep"].processed == 10
-        assert stats._stats["PassthroughStep"].processed == 5
-        assert stats._stats["TerminalStep"].processed == 5
+        assert stats._stats["branch"].processed == 10
+        assert stats._stats["passthrough"].processed == 5
+        assert stats._stats["terminal"].processed == 5
 
     @pytest.mark.timeout(30)
     def test_fan_out(self, tmp_path: Path) -> None:
@@ -323,9 +323,9 @@ class TestPipelineEngineDAG:
             },
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["PassthroughStep"].processed == 5
-        assert stats._stats["FilterEvenStep"].processed == 5
-        assert stats._stats["TerminalStep"].processed == 5
+        assert stats._stats["passthrough"].processed == 5
+        assert stats._stats["filter_even"].processed == 5
+        assert stats._stats["terminal"].processed == 5
 
     @pytest.mark.timeout(30)
     def test_fan_in(self, tmp_path: Path) -> None:
@@ -346,8 +346,8 @@ class TestPipelineEngineDAG:
             },
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["BranchEvenOddStep"].processed == 10
-        assert stats._stats["TerminalStep"].processed == 10
+        assert stats._stats["branch"].processed == 10
+        assert stats._stats["terminal"].processed == 10
 
     @pytest.mark.timeout(30)
     def test_terminal_no_output_queues(self, tmp_path: Path) -> None:
@@ -360,7 +360,7 @@ class TestPipelineEngineDAG:
             {"source": DummySourceStep, "terminal": TerminalStep},
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["TerminalStep"].processed == 3
+        assert stats._stats["terminal"].processed == 3
 
     @pytest.mark.timeout(30)
     def test_unconnected_tag_dropped(self, tmp_path: Path) -> None:
@@ -373,8 +373,8 @@ class TestPipelineEngineDAG:
             {"source": DummySourceStep, "passthrough": PassthroughStep},
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["PassthroughStep"].processed == 5
-        assert stats._stats["PassthroughStep"].emitted == {}
+        assert stats._stats["passthrough"].processed == 5
+        assert stats._stats["passthrough"].emitted == {}
 
 
 # ---------------------------------------------------------------------------
@@ -418,7 +418,7 @@ class TestInitialStateIntegration:
             {"source": DummySourceStep, "stateful": InitialStateStep},
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["InitialStateStep"].processed == 5
+        assert stats._stats["stateful"].processed == 5
 
 
 # ---------------------------------------------------------------------------
@@ -463,7 +463,7 @@ class TestSequentialProducerTiming:
             {"source": DummySourceStep, "slow": SlowStep},
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["SlowStep"].processing_ns > 0
+        assert stats._stats["slow"].processing_ns > 0
 
     @pytest.mark.timeout(30)
     def test_sequential_first_item_at(self, tmp_path: Path) -> None:
@@ -476,7 +476,7 @@ class TestSequentialProducerTiming:
             {"source": DummySourceStep, "terminal": TerminalStep},
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["TerminalStep"].first_item_at is not None
+        assert stats._stats["terminal"].first_item_at is not None
 
     @pytest.mark.timeout(30)
     def test_sequential_idle_ns(self, tmp_path: Path) -> None:
@@ -497,7 +497,7 @@ class TestSequentialProducerTiming:
         )
         engine.run(output_dir=tmp_path / "out")
         # terminal waits for slow upstream → idle_ns > 0
-        assert stats._stats["TerminalStep"].idle_ns > 0
+        assert stats._stats["terminal"].idle_ns > 0
 
     @pytest.mark.timeout(30)
     def test_sequential_current_state_done(self, tmp_path: Path) -> None:
@@ -510,7 +510,7 @@ class TestSequentialProducerTiming:
             {"source": DummySourceStep, "terminal": TerminalStep},
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["TerminalStep"].current_state == "done"
+        assert stats._stats["terminal"].current_state == "done"
 
 
 # ---------------------------------------------------------------------------
@@ -555,7 +555,7 @@ class TestParallelProducerTiming:
             {"source": DummySourceStep, "slow": SlowStep},
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["SlowStep"].processing_ns > 0
+        assert stats._stats["slow"].processing_ns > 0
 
     @pytest.mark.timeout(30)
     def test_parallel_first_item_at(self, tmp_path: Path) -> None:
@@ -568,7 +568,7 @@ class TestParallelProducerTiming:
             {"source": DummySourceStep, "passthrough": PassthroughStep},
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["PassthroughStep"].first_item_at is not None
+        assert stats._stats["passthrough"].first_item_at is not None
 
     @pytest.mark.timeout(30)
     def test_parallel_current_state_done(self, tmp_path: Path) -> None:
@@ -581,7 +581,7 @@ class TestParallelProducerTiming:
             {"source": DummySourceStep, "passthrough": PassthroughStep},
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["PassthroughStep"].current_state == "done"
+        assert stats._stats["passthrough"].current_state == "done"
 
     @pytest.mark.timeout(30)
     def test_parallel_regression_all_items(self, tmp_path: Path) -> None:
@@ -596,7 +596,7 @@ class TestParallelProducerTiming:
             {"source": DummySourceStep, "filter_even": FilterEvenStep},
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["FilterEvenStep"].processed == 20
+        assert stats._stats["filter_even"].processed == 20
 
 
 # ---------------------------------------------------------------------------
@@ -638,7 +638,7 @@ class TestInputProducerTiming:
             {"source": DummySourceStep, "terminal": TerminalStep},
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["DummySourceStep"].current_state == "done"
+        assert stats._stats["source"].current_state == "done"
 
     @pytest.mark.timeout(30)
     def test_source_first_item_at(self, tmp_path: Path) -> None:
@@ -651,7 +651,7 @@ class TestInputProducerTiming:
             {"source": DummySourceStep, "terminal": TerminalStep},
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["DummySourceStep"].first_item_at is not None
+        assert stats._stats["source"].first_item_at is not None
 
 
 # ---------------------------------------------------------------------------
@@ -755,4 +755,107 @@ class TestStepOpenLifecycle:
             {"source": DummySourceStep, "lifecycle": LifecycleTrackingStep},
         )
         engine.run(output_dir=tmp_path / "out")
-        assert stats._stats["LifecycleTrackingStep"].processed == 3
+        assert stats._stats["lifecycle"].processed == 3
+
+
+# ---------------------------------------------------------------------------
+# Multi-instance same-type steps (name/type separation)
+# ---------------------------------------------------------------------------
+
+
+class TestMultiInstanceSameType:
+    def _make_engine(
+        self,
+        steps: list[StepConfig],
+        registry_map: dict[str, type],
+        *,
+        workers: int = 1,
+        queue_size: int = 0,
+        chunk_size: int = 50,
+    ) -> tuple[PipelineEngine, StatsCollector]:
+        config = PipelineConfig(
+            pipeline=steps,
+            execution=ExecutionConfig(
+                workers=workers, queue_size=queue_size, chunk_size=chunk_size
+            ),
+        )
+        registry = StepRegistry()
+        for name, cls in registry_map.items():
+            registry.register(name, cls)
+        stats = StatsCollector()
+        engine = PipelineEngine(config=config, registry=registry, stats=stats)
+        return engine, stats
+
+    @pytest.mark.timeout(30)
+    def test_two_terminals_same_type_different_names(
+        self, tmp_path: Path
+    ) -> None:
+        """Same type registered once, used twice with different names."""
+        engine, stats = self._make_engine(
+            [
+                StepConfig(
+                    type="source",
+                    items=list(range(10)),
+                    outputs={"main": "branch"},
+                ),
+                StepConfig(
+                    type="branch",
+                    outputs={"even": "term_even", "odd": "term_odd"},
+                ),
+                StepConfig(type="terminal", name="term_even"),
+                StepConfig(type="terminal", name="term_odd"),
+            ],
+            {
+                "source": DummySourceStep,
+                "branch": BranchEvenOddStep,
+                "terminal": TerminalStep,
+            },
+        )
+        engine.run(output_dir=tmp_path / "out")
+        assert stats._stats["term_even"].processed == 5
+        assert stats._stats["term_odd"].processed == 5
+
+    @pytest.mark.timeout(30)
+    def test_two_passthroughs_same_type_chain(
+        self, tmp_path: Path
+    ) -> None:
+        """Chain: source → pass1 → pass2 → terminal."""
+        engine, stats = self._make_engine(
+            [
+                StepConfig(
+                    type="source",
+                    items=list(range(5)),
+                    outputs={"main": "pass1"},
+                ),
+                StepConfig(
+                    type="passthrough",
+                    name="pass1",
+                    outputs={"main": "pass2"},
+                ),
+                StepConfig(
+                    type="passthrough",
+                    name="pass2",
+                    outputs={"main": "terminal"},
+                ),
+                StepConfig(type="terminal"),
+            ],
+            {
+                "source": DummySourceStep,
+                "passthrough": PassthroughStep,
+                "terminal": TerminalStep,
+            },
+        )
+        engine.run(output_dir=tmp_path / "out")
+        assert stats._stats["pass1"].processed == 5
+        assert stats._stats["pass2"].processed == 5
+        assert stats._stats["terminal"].processed == 5
+
+    def test_duplicate_name_without_explicit_name_raises(self) -> None:
+        """Two steps with same type and no name → duplicate name error."""
+        with pytest.raises(Exception, match="duplicate step name"):
+            PipelineConfig(
+                pipeline=[
+                    StepConfig(type="terminal"),
+                    StepConfig(type="terminal"),
+                ],
+            )

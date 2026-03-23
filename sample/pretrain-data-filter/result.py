@@ -35,7 +35,7 @@ class FilterResult(BaseResult):
             removed_reasons=merged_reasons,
         )
 
-    def write(self, output_dir: Path) -> None:
+    def write(self, output_dir: Path, step_name: str = "") -> None:
         """Write stats.json to output_dir."""
         output_dir.mkdir(parents=True, exist_ok=True)
         path = output_dir / "stats.json"

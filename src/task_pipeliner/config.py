@@ -43,8 +43,16 @@ class StepConfig(_WrappingModel):
     model_config = ConfigDict(extra="allow")
 
     type: str
+    name: str = ""
+    """Instance name. Defaults to ``type`` when omitted (backward compatible)."""
     enabled: bool = True
     outputs: dict[str, str | list[str]] | None = None
+
+    @model_validator(mode="after")
+    def _default_name(self) -> StepConfig:
+        if not self.name:
+            self.name = self.type
+        return self
 
 
 class ExecutionConfig(_WrappingModel):
@@ -83,8 +91,22 @@ class PipelineConfig(_WrappingModel):
         return self
 
     @model_validator(mode="after")
+    def _names_unique(self) -> PipelineConfig:
+        seen: dict[str, int] = {}
+        for i, step in enumerate(self.pipeline):
+            assert step.name is not None  # guaranteed by StepConfig._default_name
+            if step.name in seen:
+                raise ValueError(
+                    f"duplicate step name '{step.name}' at index {i} "
+                    f"(first at index {seen[step.name]}). "
+                    f"Use the 'name' field to distinguish instances of the same type"
+                )
+            seen[step.name] = i
+        return self
+
+    @model_validator(mode="after")
     def _outputs_reference_valid_steps(self) -> PipelineConfig:
-        known_types = {step.type for step in self.pipeline}
+        known_names = {step.name for step in self.pipeline}
         for step in self.pipeline:
             if step.outputs is None:
                 continue
@@ -92,10 +114,10 @@ class PipelineConfig(_WrappingModel):
                 if isinstance(targets, str):
                     targets = [targets]
                 for target in targets:
-                    if target not in known_types:
+                    if target not in known_names:
                         raise ValueError(
-                            f"step '{step.type}' outputs tag '{tag}' references "
-                            f"unknown step type '{target}'"
+                            f"step '{step.name}' outputs tag '{tag}' references "
+                            f"unknown step '{target}'"
                         )
         return self
 
@@ -125,9 +147,9 @@ def load_config(path: Path) -> PipelineConfig:
     except Exception as e:
         raise _wrap_validation_error(e) from e
 
-    disabled = [s.type for s in cfg.pipeline if not s.enabled]
-    for step_type in disabled:
-        logger.warning("step disabled: %s", step_type)
+    disabled = [s.name for s in cfg.pipeline if not s.enabled]
+    for step_name in disabled:
+        logger.warning("step disabled: %s", step_name)
 
     logger.info("config loaded path=%s steps=%d", path, len(cfg.pipeline))
     return cfg

@@ -62,7 +62,7 @@ class TestPipeline:
         stats_file = output_dir / "stats.json"
         assert stats_file.exists()
         data = orjson.loads(stats_file.read_bytes())
-        pt = next(d for d in data if d["step_name"] == "PassthroughStep")
+        pt = next(d for d in data if d["step_name"] == "passthrough")
         assert pt["processed"] == 5
 
     @pytest.mark.timeout(30)
@@ -90,7 +90,7 @@ class TestPipeline:
         stats_file = output_dir / "stats.json"
         assert stats_file.exists()
         data = orjson.loads(stats_file.read_bytes())
-        fe = next(d for d in data if d["step_name"] == "FilterEvenStep")
+        fe = next(d for d in data if d["step_name"] == "filter_even")
         assert fe["processed"] == 10
 
     def test_run_unregistered_step_raises(self, tmp_path: Path) -> None:

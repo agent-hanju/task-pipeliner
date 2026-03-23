@@ -181,15 +181,18 @@ class PipelineEngine:
 
         # config의 type 이름으로 registry에서 클래스를 찾아 인스턴스화
         # StepConfig의 extra 필드들이 Step.__init__의 kwargs로 전달됨
-        instance_by_type: dict[str, BaseStep[Any]] = {}
+        # name 필드가 인스턴스 고유 키 (생략 시 type과 동일)
+        instance_by_name: dict[str, BaseStep[Any]] = {}
         for step_cfg in enabled_cfgs:
             cls = self.registry.get(step_cfg.type)
             extra = step_cfg.model_extra or {}
-            instance_by_type[step_cfg.type] = cls(**extra)
+            step = cls(**extra)
+            step.name = step_cfg.name
+            instance_by_name[step_cfg.name] = step
 
         # 첫 번째 step은 반드시 SOURCE여야 함
-        source_type = enabled_cfgs[0].type
-        source_step = instance_by_type[source_type]
+        source_name = enabled_cfgs[0].name
+        source_step = instance_by_name[source_name]
 
         if source_step.step_type != StepType.SOURCE:
             raise ConfigValidationError(
@@ -198,7 +201,7 @@ class PipelineEngine:
             )
         # 두 번째 이후에 SOURCE가 있으면 에러
         for step_cfg in enabled_cfgs[1:]:
-            step = instance_by_type[step_cfg.type]
+            step = instance_by_name[step_cfg.name]
             if step.step_type == StepType.SOURCE:
                 raise ConfigValidationError(
                     "SOURCE step must be the first step in the pipeline",
@@ -206,7 +209,7 @@ class PipelineEngine:
                 )
 
         # 통계 수집기에 모든 step 등록
-        for step in instance_by_type.values():
+        for step in instance_by_name.values():
             self.stats.register(step.name)
 
         # ======================================================================
@@ -219,14 +222,14 @@ class PipelineEngine:
         #   → StepA의 "kept" 태그 큐 → StepB의 입력 큐
         #   → StepA의 "removed" 태그 큐 → StepC의 입력 큐
         #
-        # output_queues_map[step_type][tag] = [큐들]  (한 태그가 여러 step으로 fan-out 가능)
-        # input_queues_map[step_type] = [이 step으로 들어오는 큐들]  (여러 step에서 fan-in 가능)
+        # output_queues_map[step_name][tag] = [큐들]  (한 태그가 여러 step으로 fan-out 가능)
+        # input_queues_map[step_name] = [이 step으로 들어오는 큐들]  (여러 step에서 fan-in 가능)
 
         output_queues_map: dict[str, dict[str, list[multiprocessing.Queue[Any]]]] = {
-            t: {} for t in instance_by_type
+            n: {} for n in instance_by_name
         }
         input_queues_map: dict[str, list[multiprocessing.Queue[Any]]] = {
-            t: [] for t in instance_by_type if t != source_type
+            n: [] for n in instance_by_name if n != source_name
         }
         # 비상 종료 시 sentinel 주입을 위해 모든 큐를 추적
         all_queues: list[multiprocessing.Queue[Any]] = []
@@ -237,18 +240,18 @@ class PipelineEngine:
             for tag, targets in step_cfg.outputs.items():
                 # targets는 "StepB" (str) 또는 ["StepB", "StepC"] (list) 형태
                 target_list = [targets] if isinstance(targets, str) else targets
-                for target_type in target_list:
-                    if target_type not in instance_by_type:
+                for target_name in target_list:
+                    if target_name not in instance_by_name:
                         # disabled된 step을 가리키면 무시
                         logger.debug(
                             "output target '%s' not in enabled steps — skipped",
-                            target_type,
+                            target_name,
                         )
                         continue
                     # 각 연결(edge)마다 독립적인 큐를 생성
                     q: multiprocessing.Queue[Any] = ctx.Queue()
-                    output_queues_map[step_cfg.type].setdefault(tag, []).append(q)
-                    input_queues_map[target_type].append(q)
+                    output_queues_map[step_cfg.name].setdefault(tag, []).append(q)
+                    input_queues_map[target_name].append(q)
                     all_queues.append(q)
 
         # ======================================================================
@@ -265,25 +268,25 @@ class PipelineEngine:
         merged_input: dict[str, multiprocessing.Queue[Any]] = {}
         merger_threads: list[threading.Thread] = []
         # SOURCE를 제외한 나머지 step들 (처리 대상)
-        processing_types = [cfg.type for cfg in enabled_cfgs if cfg.type != source_type]
+        processing_names = [cfg.name for cfg in enabled_cfgs if cfg.name != source_name]
 
-        for step_type in processing_types:
-            in_queues = input_queues_map.get(step_type, [])
+        for step_name in processing_names:
+            in_queues = input_queues_map.get(step_name, [])
             if len(in_queues) == 0:
                 # upstream 없음 → 빈 큐에 sentinel을 넣어서 즉시 종료
                 q = ctx.Queue()
                 q.put(Sentinel())
-                merged_input[step_type] = q
+                merged_input[step_name] = q
                 all_queues.append(q)
             elif len(in_queues) == 1:
                 # 1:1 연결 → 큐를 그대로 사용
-                merged_input[step_type] = in_queues[0]
+                merged_input[step_name] = in_queues[0]
             else:
                 # fan-in → 머저 스레드로 합침
                 merged_q: multiprocessing.Queue[Any] = ctx.Queue()
                 threads = _start_queue_merger(in_queues, merged_q)
                 merger_threads.extend(threads)
-                merged_input[step_type] = merged_q
+                merged_input[step_name] = merged_q
                 all_queues.append(merged_q)
 
         # ======================================================================
@@ -293,7 +296,7 @@ class PipelineEngine:
         # SOURCE step 전용 InputProducer — items()를 호출해서 출력 큐에 넣는다
         input_producer = InputProducer(
             step=source_step,
-            output_queues=output_queues_map[source_type],
+            output_queues=output_queues_map[source_name],
             stats=self.stats,
         )
 
@@ -303,12 +306,12 @@ class PipelineEngine:
         producer_by_name: dict[str, SequentialProducer | ParallelProducer] = {}
         state_events: dict[str, threading.Event] = {}  # state 변경 시 깨우기 위한 이벤트
 
-        for step_type in processing_types:
-            step = instance_by_type[step_type]
-            in_q = merged_input[step_type]
-            out_qs = output_queues_map[step_type]
+        for step_name in processing_names:
+            step = instance_by_name[step_name]
+            in_q = merged_input[step_name]
+            out_qs = output_queues_map[step_name]
             rq: multiprocessing.Queue[Any] = ctx.Queue()  # 결과 수집용 큐
-            result_queues[step_type] = rq
+            result_queues[step_name] = rq
             evt = threading.Event()
             state_events[step.name] = evt
 
@@ -374,7 +377,7 @@ class PipelineEngine:
 
         state_dispatch = _make_state_dispatch(producer_by_name, state_events)
         # 모든 step에 콜백 주입 (워커로 pickle될 때는 __getstate__에서 제외됨)
-        for step in instance_by_type.values():
+        for step in instance_by_name.values():
             step._state_dispatch = state_dispatch
 
         logger.debug("built %d producers", len(producers))
@@ -384,7 +387,7 @@ class PipelineEngine:
         # ======================================================================
 
         # 진행률 표시에 사용할 step 이름 목록
-        step_names = [instance_by_type[cfg.type].name for cfg in enabled_cfgs]
+        step_names = [instance_by_name[cfg.name].name for cfg in enabled_cfgs]
         # InputProducer는 별도 스레드에서 실행
         feeder = threading.Thread(target=input_producer.run, daemon=True)
         # 각 Producer도 별도 스레드에서 실행
@@ -470,12 +473,12 @@ class PipelineEngine:
 
             # 각 step의 결과(BaseResult)를 result_queue에서 꺼내서 파일로 기록
             output_dir.mkdir(parents=True, exist_ok=True)
-            for step_type in processing_types:
-                rq = result_queues[step_type]
-                step = instance_by_type[step_type]
+            for step_name in processing_names:
+                rq = result_queues[step_name]
+                step = instance_by_name[step_name]
                 try:
                     result: BaseResult = rq.get(timeout=2)
-                    result.write(output_dir)
+                    result.write(output_dir, step_name=step.name)
                     logger.debug("result written for step %s", step.name)
                 except _queue.Empty:
                     logger.debug("no result for step %s", step.name)

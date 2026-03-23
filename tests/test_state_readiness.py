@@ -196,7 +196,7 @@ class TestEngineStateDispatch:
                     items=[1, 2, 3],
                     outputs={"main": ["collector", "gated"]},
                 ),
-                StepConfig(type="collector", target_step="StateGatedStep"),
+                StepConfig(type="collector", target_step="gated"),
                 StepConfig(type="gated", outputs={"main": "terminal"}),
                 StepConfig(type="terminal"),
             ],
@@ -209,6 +209,6 @@ class TestEngineStateDispatch:
         )
         engine.run(output_dir=tmp_path / "out")
 
-        assert stats._stats["CollectorStep"].processed == 3
-        assert stats._stats["StateGatedStep"].processed == 3
-        assert stats._stats["TerminalStep"].processed == 3
+        assert stats._stats["collector"].processed == 3
+        assert stats._stats["gated"].processed == 3
+        assert stats._stats["terminal"].processed == 3

@@ -72,7 +72,7 @@ class TaxonomyResult(BaseResult):
             errored=self.errored + other.errored,
         )
 
-    def write(self, output_dir: Path) -> None:
+    def write(self, output_dir: Path, step_name: str = "") -> None:
         """Write count_summary.json to output_dir."""
         logger.debug("output_dir=%s", output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)

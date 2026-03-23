@@ -24,7 +24,7 @@ class NullResult(BaseResult):
     def merge(self, other: Self) -> Self:
         return self
 
-    def write(self, output_dir: Path) -> None:
+    def write(self, output_dir: Path, step_name: str = "") -> None:
         pass
 
 
@@ -41,7 +41,7 @@ class CountResult(BaseResult):
             filtered=self.filtered + other.filtered,
         )
 
-    def write(self, output_dir: Path) -> None:
+    def write(self, output_dir: Path, step_name: str = "") -> None:
         (output_dir / "count_result.json").write_bytes(
             orjson.dumps({"passed": self.passed, "filtered": self.filtered})
         )

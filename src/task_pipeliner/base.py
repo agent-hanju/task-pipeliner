@@ -29,7 +29,7 @@ class BaseResult(ABC):
         ...
 
     @abstractmethod
-    def write(self, output_dir: Path) -> None:
+    def write(self, output_dir: Path, step_name: str = "") -> None:
         """Write this result to files under *output_dir*."""
         ...
 
@@ -41,6 +41,7 @@ class BaseStep[R: BaseResult](ABC):
     """Declared output tags. Empty tuple ``()`` means terminal step (emit not allowed)."""
 
     _state_dispatch: Callable[[str, Any], None] | None = None
+    _name: str | None = None
 
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
@@ -53,7 +54,12 @@ class BaseStep[R: BaseResult](ABC):
 
     @property
     def name(self) -> str:
-        return type(self).__name__
+        """Instance name. Defaults to class name; overridden by engine from config."""
+        return self._name or type(self).__name__
+
+    @name.setter
+    def name(self, value: str) -> None:
+        self._name = value
 
     @property
     @abstractmethod

@@ -33,9 +33,9 @@ class TestNormalCompletion:
         data = orjson.loads(stats_file.read_bytes())
         assert isinstance(data, list)
         step_names = [d["step_name"] for d in data]
-        assert "DummySourceStep" in step_names
-        assert "PassthroughStep" in step_names
-        pt = next(d for d in data if d["step_name"] == "PassthroughStep")
+        assert "source" in step_names
+        assert "passthrough" in step_names
+        pt = next(d for d in data if d["step_name"] == "passthrough")
         assert pt["processed"] == 10
 
     @pytest.mark.timeout(20)
@@ -182,6 +182,6 @@ class TestSignalShutdown:
         stats_file = output_dir / "stats.json"
         assert stats_file.exists()
         data = orjson.loads(stats_file.read_bytes())
-        slow = next((d for d in data if d["step_name"] == "SlowStep"), None)
+        slow = next((d for d in data if d["step_name"] == "slow"), None)
         assert slow is not None
         assert slow["processed"] >= 0

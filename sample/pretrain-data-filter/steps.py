@@ -36,7 +36,7 @@ class _NullResult(BaseResult):
     def merge(self, other: _NullResult) -> _NullResult:
         return self
 
-    def write(self, output_dir: Path) -> None:
+    def write(self, output_dir: Path, step_name: str = "") -> None:
         pass
 
 

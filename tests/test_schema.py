@@ -79,7 +79,7 @@ class _DummyResult(BaseResult):
     def merge(self, other: Self) -> Self:
         return type(self)(count=self.count + other.count)  # type: ignore[return-value]
 
-    def write(self, output_dir: Path) -> None:
+    def write(self, output_dir: Path, step_name: str = "") -> None:
         (output_dir / "dummy_result.txt").write_text(f"count={self.count}")
 
 
@@ -90,7 +90,7 @@ class _NoOpResult(BaseResult):
     def merge(self, other: Self) -> Self:
         return self
 
-    def write(self, output_dir: Path) -> None:
+    def write(self, output_dir: Path, step_name: str = "") -> None:
         pass
 
 
@@ -499,6 +499,81 @@ class TestLoadConfig:
         assert cfg.pipeline[0].outputs == {"main": "preprocess"}
         assert cfg.pipeline[1].outputs == {"kept": "writer", "removed": "writer"}
         assert cfg.pipeline[2].outputs is None
+
+    def test_name_defaults_to_type(self, tmp_path: Path) -> None:
+        yaml_file = tmp_path / "cfg.yaml"
+        yaml_file.write_text("pipeline:\n  - type: filter\n")
+        cfg = load_config(yaml_file)
+        assert cfg.pipeline[0].name == "filter"
+
+    def test_name_explicit(self, tmp_path: Path) -> None:
+        yaml_file = tmp_path / "cfg.yaml"
+        yaml_file.write_text(
+            "pipeline:\n"
+            "  - type: filter\n"
+            "    name: strict_filter\n"
+        )
+        cfg = load_config(yaml_file)
+        assert cfg.pipeline[0].name == "strict_filter"
+        assert cfg.pipeline[0].type == "filter"
+
+    def test_same_type_different_names(self, tmp_path: Path) -> None:
+        yaml_file = tmp_path / "cfg.yaml"
+        yaml_file.write_text(
+            "pipeline:\n"
+            "  - type: filter\n"
+            "    name: strict\n"
+            "    outputs:\n"
+            "      main: loose\n"
+            "  - type: filter\n"
+            "    name: loose\n"
+        )
+        cfg = load_config(yaml_file)
+        assert cfg.pipeline[0].name == "strict"
+        assert cfg.pipeline[1].name == "loose"
+        assert cfg.pipeline[0].type == cfg.pipeline[1].type == "filter"
+
+    def test_duplicate_name_raises(self, tmp_path: Path) -> None:
+        yaml_file = tmp_path / "dup.yaml"
+        yaml_file.write_text(
+            "pipeline:\n"
+            "  - type: filter\n"
+            "  - type: filter\n"
+        )
+        with pytest.raises(ConfigValidationError, match="duplicate step name"):
+            load_config(yaml_file)
+
+    def test_outputs_reference_by_name(self, tmp_path: Path) -> None:
+        """outputs must reference step names, not types."""
+        yaml_file = tmp_path / "cfg.yaml"
+        yaml_file.write_text(
+            "pipeline:\n"
+            "  - type: source\n"
+            "    name: my_source\n"
+            "    outputs:\n"
+            "      main: my_sink\n"
+            "  - type: sink\n"
+            "    name: my_sink\n"
+        )
+        cfg = load_config(yaml_file)
+        assert cfg.pipeline[0].outputs == {"main": "my_sink"}
+
+    def test_outputs_reference_type_when_name_differs_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """If name differs from type, outputs must use the name."""
+        yaml_file = tmp_path / "bad.yaml"
+        yaml_file.write_text(
+            "pipeline:\n"
+            "  - type: source\n"
+            "    name: my_source\n"
+            "    outputs:\n"
+            "      main: sink\n"
+            "  - type: sink\n"
+            "    name: my_sink\n"
+        )
+        with pytest.raises(ConfigValidationError):
+            load_config(yaml_file)
 
     def test_yaml_outputs_reference_invalid_step_raises(self, tmp_path: Path) -> None:
         yaml_file = tmp_path / "bad_topo.yaml"
