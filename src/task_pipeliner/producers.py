@@ -288,6 +288,11 @@ def _init_worker(output_queues: dict[str, list[multiprocessing.Queue[Any]]]) -> 
     """Initializer for ProcessPoolExecutor workers — stores queues in a global."""
     global _worker_output_queues  # noqa: PLW0603
     _worker_output_queues = output_queues
+    # 워커 프로세스 종료 시 Queue feeder thread의 pipe flush 대기를 비활성화.
+    # 부모 프로세스(다운스트림)가 큐를 소비하므로 데이터 손실 없음.
+    for tag_queues in output_queues.values():
+        for q in tag_queues:
+            q.cancel_join_thread()
 
 
 def _parallel_worker(
@@ -470,6 +475,8 @@ class ParallelProducer(BaseProducer):
                         )
                 # 모든 아이템 처리 완료 → sentinel 먼저 전파
                 self._send_sentinel()
+                # 처리 완료 시점 기록 (executor cleanup 대기 시간 제외)
+                self.stats.finish(self.step.name)
             finally:
                 executor.shutdown(wait=True)
         finally:
@@ -477,7 +484,6 @@ class ParallelProducer(BaseProducer):
             if accumulated is not None:
                 self._publish_result(accumulated)
             self.stats.set_state(self.step.name, "done")
-            self.stats.finish(self.step.name)
             if self.next_state_setter is not None:
                 self.next_state_setter(self.state)
             logger.info("producer finished step=%s", self.step.name)
