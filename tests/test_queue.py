@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import multiprocessing
 import pickle
+import queue
 from typing import Any
 
 import pytest
@@ -401,7 +402,10 @@ class TestSequentialProducer:
             collected.append(obj)
 
         # Get result (may be absent if 0 items processed)
-        result = result_q.get(timeout=2) if not result_q.empty() else None
+        try:
+            result = result_q.get(timeout=2)
+        except queue.Empty:
+            result = None
 
         return collected, result, stats
 
@@ -517,7 +521,8 @@ class TestSequentialProducer:
         obj = out_q.get(timeout=2)
         assert is_sentinel(obj)
         # 성공 항목 없으므로 result는 publish 안 됨
-        assert result_q.empty()
+        with pytest.raises(queue.Empty):
+            result_q.get(timeout=0.5)
         assert stats._stats[step.name].errored == 5
 
     @pytest.mark.timeout(15)
@@ -588,7 +593,10 @@ class TestParallelProducer:
             collected.append(obj)
 
         # Get result (may be absent if 0 items processed)
-        result = result_q.get(timeout=5) if not result_q.empty() else None
+        try:
+            result = result_q.get(timeout=5)
+        except queue.Empty:
+            result = None
 
         return collected, result, stats
 
