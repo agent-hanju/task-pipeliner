@@ -299,3 +299,32 @@ def _parallel_worker(chunk, step, state, is_last_chunk):
 - `task_pipeliner/engine.py`: 큐 생성, join_timeout, 파이프라인 라이프사이클
 - `taxanomy-converter/pipelines/naver_news_prod.yaml`: 테스트 파이프라인 설정
 - `taxanomy-converter/run.py`: faulthandler 추가 (디버깅용)
+
+---
+
+## 7. 해결 (2026-03-23)
+
+본 문서에서 분석한 Bulk Put Stall(§2)과 Streaming Put 유실(§3) 문제를
+**프로듀서 주도 put 구조**로 전환하여 해결함. (커밋 09d7743)
+
+### 적용 내용
+
+- `_worker_output_queues` 글로벌 + `_init_worker` 함수 삭제
+- `_parallel_worker`: 아이템을 큐에 직접 put하지 않고 로컬 리스트에 누적 후 반환값으로 프로듀서에 전달
+- `ParallelProducer._drain_future_result()`: future에서 아이템을 수거하여 output_queue에 단독 put
+- `ProcessPoolExecutor` 생성에서 `initializer`/`initargs` 제거
+- `cancel_join_thread()`는 부모 측(engine.py)만 유지, 워커 측은 `_init_worker` 제거와 함께 삭제
+
+### 해결 원리
+
+```
+워커 → return (result, counts, items) → 프로듀서 → q.put(item) → 다운스트림 큐
+                                        프로듀서 → q.put(sentinel)
+```
+
+프로듀서가 단일 프로세스에서 데이터와 sentinel을 순서대로 put하므로:
+- **Sentinel race condition**(§3.3): 원천 차단 — 같은 프로세스 내 순서 보장
+- **워커 사망 시 큐 파손**(§3.2): 경로 제거 — 워커가 output_queue에 접근하지 않음
+- **Bulk Put Stall**(§2.3): `cancel_join_thread` 유지 + 워커가 output_queue에 안 쓰므로 feeder thread 블로킹 경로 제거
+
+§4.2의 TODO 항목은 모두 완료됨.

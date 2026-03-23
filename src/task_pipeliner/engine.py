@@ -250,9 +250,9 @@ class PipelineEngine:
                         continue
                     # 각 연결(edge)마다 독립적인 큐를 생성
                     q: multiprocessing.Queue[Any] = ctx.Queue()
-                    # 워커 프로세스 종료 시 Queue 내부 feeder thread의
+                    # 프로듀서 스레드 종료 시 Queue 내부 feeder thread의
                     # pipe flush를 기다리지 않도록 설정.
-                    # 다운스트림이 큐를 소비하므로 데이터 손실 없음.
+                    # 다운스트림 프로듀서가 큐를 소비하므로 데이터 손실 없음.
                     q.cancel_join_thread()
                     output_queues_map[step_cfg.name].setdefault(tag, []).append(q)
                     input_queues_map[target_name].append(q)
