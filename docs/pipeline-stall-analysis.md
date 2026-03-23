@@ -133,30 +133,36 @@ items를 반환값으로 받지 않고 **워커 프로세스에서 직접 output
 - **다음 스텝이 2,007건만 수신** (99.95% 유실)
 - 파이프라인은 정상 완료 (에러 없음)
 
-#### Gated step에서의 증폭 효과
+#### Gated step에서의 이상 동작
 
 ```
 --- Pipeline Progress (595.0s) ---
   quality_filter     1788 in → 1652 kept, 136 removed  [done]
   bp_collect                        1652 produced       [done]
-  bp_clean                                 0 in         [processing]  ← 완전 유실
+  bp_clean                                 0 in         [processing]  ← 0건인데 processing
 ```
 
-`quality_filter`(PARALLEL)가 `bp_collect`와 `bp_clean` 두 큐에 동시 emit하는 구조에서:
-- `bp_collect`(SEQUENTIAL): 즉시 소비 → 1652건 정상 수신
-- `bp_clean`(gated): `bp_collect` 완료까지 큐 소비 안 함 → 큐에 아이템 적체
+`bp_clean`이 `[processing]`이면서 `0 in` — 모순적인 상태:
+- `[processing]`은 최소 1개의 non-sentinel 아이템을 `input_queue.get()`으로 꺼냈다는 의미
+  (sentinel이 첫 아이템이었다면 `[idle]` → `[done]`으로 전환돼야 함)
+- `0 in`은 executor에 submit된 future가 하나도 완료되지 않았다는 의미
 
-**Gated step이 소비를 미루는 동안 Sentinel이 데이터를 완전히 추월:**
+**확인된 원인**: `docker top` 결과 워커 프로세스가 전부 사라지고 resource_tracker만 남아있음.
+- 워커가 streaming put 중 `q.put(item)` → feeder thread의 pipe write 과정에서 비정상 종료
+- `ProcessPoolExecutor`가 `BrokenProcessPool` 예외를 발생시키지 못하고 메인 프로세스가 future 완료를 무한 대기
+- 메인 프로세스는 PID 1이라 SIGINT/SIGUSR1도 무시 → 컨테이너 hang 상태
+
 ```
-bp_clean 큐 (소비 없이 쌓이는 중):
-  time 1: [item, item, ...]          ← 워커 feeder thread가 flush
-  time 2: [item, SENTINEL, item...]  ← 메인이 sentinel 전송, 데이터 사이에 삽입
-  time 3: [SENTINEL, item, item...]  ← 최악: sentinel이 맨 앞에 도달
-
-bp_collect 완료 → bp_clean 소비 시작 → 첫 아이템이 Sentinel → 0 in
+$ docker top <container>
+PID     CMD
+79515   python run.py run --config /data/pipe.yml --output /data/output
+79679   /venv/bin/python -B -c from multiprocessing.resource_tracker import main;main(6)
+        ↑ 워커 프로세스 전무 — executor 워커가 전부 사라짐
 ```
 
-즉시 소비하는 스텝에서는 "일부 유실"이지만, gated step에서는 **전량 유실**이 발생한다.
+이 현상은 streaming put의 sentinel race만으로는 설명되지 않으며,
+**워커 프로세스가 output_queue에 직접 write하다가 죽는** 더 심각한 문제가 존재한다.
+bulk put에서는 워커가 큐에 직접 쓰지 않으므로 이 경로가 없다.
 
 ### 3.3 원인: Sentinel Race Condition
 
@@ -247,7 +253,37 @@ def _parallel_worker(chunk, step, state, is_last_chunk):
 
 ---
 
-## 5. 교훈
+## 5. CPython 기존 이슈 레퍼런스
+
+### 직접 관련
+
+| 이슈 | 제목 | 관련성 |
+|------|------|--------|
+| [CPython #94777](https://github.com/python/cpython/issues/94777) | ProcessPoolExecutor deadlock when child crashes during queue write | 워커 사망 시 `BrokenProcessPool` 미발생, 부모 무한 hang. **3.9/3.10에서 regression** (3.8에서는 정상) |
+| [bpo-43805](https://bugs.python.org/issue43805) | Queue hangs when process on other side dies | 소비자 사망 → pipe 가득 참 → feeder thread 블로킹 → 워커 종료 불가 |
+| [bpo-20527](https://bugs.python.org/issue20527) | Queue deadlocks after reader process death | 동일 메커니즘: pipe reader 없음 → writer 영원히 블로킹 |
+| [CPython #128186](https://github.com/python/cpython/issues/128186) | Queue: exceeding byte limit prevents proper exit | 큐 데이터량이 pipe 용량 초과 시 프로세스 종료 불가 |
+
+### 관련 수정 이력
+
+| 이슈 | 수정 내용 | Python 버전 |
+|------|----------|-------------|
+| [CPython #105829](https://github.com/python/cpython/issues/105829) | ProcessPoolExecutor deadlock with many tasks | 3.11 (#108513), 3.12 (#109784) |
+| [CPython PR #125492](https://github.com/python/cpython/pull/125492) | Fix deadlock in ProcessPoolExecutor shutdown | 3.13+ |
+| [bpo-22393](https://bugs.python.org/issue22393) | Pool shouldn't hang forever on worker death | 3.7+ (#10441) |
+
+### 업계 권장 사항 (공식 문서 + 커뮤니티)
+
+> "워커에서 Queue에 직접 쓰는 것은 안티패턴. 반환값으로 돌려서 메인에서 큐에 넣어라."
+> — [sopython canonical: Programs using multiprocessing hang](https://sopython.com/canon/82/programs-using-multiprocessing-hang-deadlock-and-never-complete/)
+
+- `cancel_join_thread()`로 hang 방지 → **데이터 유실 가능**
+- 워커가 `_wlock` 잡은 채 사망 → **큐 영구 파손**
+- pipe full + 소비자 정지 → **feeder thread 무한 블로킹**
+
+---
+
+## 6. 교훈
 
 1. **`multiprocessing.Queue.put()`은 비동기**: put() 반환 ≠ 데이터가 pipe에 도달
 2. **cross-process 순서 보장 없음**: 서로 다른 프로세스의 put()은 pipe에서 순서가 섞일 수 있음
