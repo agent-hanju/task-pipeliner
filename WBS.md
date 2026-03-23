@@ -358,6 +358,27 @@ M-11 + M-12 + M-13 → M-14 (통합 검증) → M-15 (문서)       │
 
 ---
 
+## Phase 12: ParallelProducer 프로듀서 주도 큐 구조 전환
+
+### M-25: _parallel_worker 프로듀서 주도 반환 구조
+> 워커가 output_queue에 직접 put하는 streaming put 구조를 제거하고,
+> 아이템을 반환값으로 돌려서 프로듀서가 output_queue에 단독 put하는 구조로 전환.
+> Sentinel race condition, 워커 사망 시 큐 파손, cross-process write 경합 해결.
+
+- [x] 레퍼런스 탐색 (pipeline-stall-analysis.md)
+- [x] 테스트 작성 (TestParallelWorker — _parallel_worker 단위 테스트 5개)
+- [x] `_worker_output_queues` 글로벌 + `_init_worker` 함수 제거
+- [x] `_parallel_worker` 변경: `_collect_emit`으로 로컬 리스트 누적, 반환 타입 `dict[str, list[Any]]`
+- [x] `_drain_future_result` 헬퍼 추가 (아이템 → output_queue put + stats 갱신)
+- [x] `_collect_completed` 리팩토링 (`_drain_future_result` 사용)
+- [x] `ProcessPoolExecutor` 생성에서 `initializer`/`initargs` 제거
+- [x] `as_completed` 루프 → `_drain_future_result` 사용
+- [x] 기존 TestParallelProducer + TestTaggedEmitRouting 통과 확인
+- [x] 린트/타입 통과 (ruff check + mypy)
+- 의존: 없음
+
+---
+
 ## TODO: 디스크 스필 큐 (이번 범위 밖)
 
 > `maxsize=0` 전환으로 데드락은 해결되지만 대용량 처리 시 OOM 위험이 남는다.

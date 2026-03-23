@@ -24,6 +24,7 @@ from task_pipeliner.producers import (
     ParallelProducer,
     Sentinel,
     SequentialProducer,
+    _parallel_worker,
     is_sentinel,
 )
 from task_pipeliner.stats import StatsCollector
@@ -291,6 +292,64 @@ class TestBaseProducer:
 
         received = result_q.get(timeout=2)
         assert isinstance(received, NullResult)
+
+
+# ---------------------------------------------------------------------------
+# _parallel_worker unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestParallelWorker:
+    """Unit tests for _parallel_worker — items returned, not put into queues."""
+
+    def test_returns_emitted_items_by_tag(self) -> None:
+        """PassthroughStep → emitted items included in return value."""
+        step = PassthroughStep()
+        result, processed, errored, emitted_items, proc_ns = _parallel_worker(
+            [1, 2, 3], step, None
+        )
+        assert processed == 3
+        assert errored == 0
+        assert "main" in emitted_items
+        assert sorted(emitted_items["main"]) == [1, 2, 3]
+
+    def test_returns_filtered_items_only(self) -> None:
+        """FilterEvenStep → only even items in return value."""
+        step = FilterEvenStep()
+        result, processed, errored, emitted_items, proc_ns = _parallel_worker(
+            [1, 2, 3, 4, 5], step, None
+        )
+        assert processed == 5
+        assert sorted(emitted_items.get("main", [])) == [2, 4]
+
+    def test_returns_empty_on_all_errors(self) -> None:
+        """All items error → emitted_items_by_tag is empty dict."""
+        step = ErrorOnItemStep(error_value=-1)
+        result, processed, errored, emitted_items, proc_ns = _parallel_worker(
+            [-1, -1, -1], step, None
+        )
+        assert processed == 0
+        assert errored == 3
+        assert emitted_items == {}
+
+    def test_terminal_step_no_items(self) -> None:
+        """TerminalStep (outputs=()) → no items emitted."""
+        step = TerminalStep()
+        result, processed, errored, emitted_items, proc_ns = _parallel_worker(
+            [1], step, None
+        )
+        assert processed == 1
+        assert emitted_items == {}
+
+    def test_result_accumulation(self) -> None:
+        """FilterEvenStep → CountResult properly accumulated."""
+        step = FilterEvenStep()
+        result, processed, errored, emitted_items, proc_ns = _parallel_worker(
+            list(range(10)), step, None
+        )
+        assert isinstance(result, CountResult)
+        assert result.passed == 5
+        assert result.filtered == 5
 
 
 # ---------------------------------------------------------------------------

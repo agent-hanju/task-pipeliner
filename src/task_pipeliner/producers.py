@@ -281,54 +281,35 @@ class SequentialProducer(BaseProducer):
 # Module-level worker function (must be picklable)
 # ---------------------------------------------------------------------------
 
-_worker_output_queues: dict[str, list[multiprocessing.Queue[Any]]] = {}
-
-
-def _init_worker(output_queues: dict[str, list[multiprocessing.Queue[Any]]]) -> None:
-    """Initializer for ProcessPoolExecutor workers — stores queues in a global."""
-    global _worker_output_queues  # noqa: PLW0603
-    _worker_output_queues = output_queues
-    # 워커 프로세스 종료 시 Queue feeder thread의 pipe flush 대기를 비활성화.
-    # 부모 프로세스(다운스트림)가 큐를 소비하므로 데이터 손실 없음.
-    for tag_queues in output_queues.values():
-        for q in tag_queues:
-            q.cancel_join_thread()
-
-
 def _parallel_worker(
     chunk: list[Any],
     step: BaseStep[Any],
     state: Any,
-) -> tuple[BaseResult | None, int, int, dict[str, int], int]:
+) -> tuple[BaseResult | None, int, int, dict[str, list[Any]], int]:
     """Process a chunk of items in a worker process.
 
-    Items are emitted directly to output queues during processing
-    (streaming put) — avoids buffering large numbers of items in memory
-    and spreads pipe I/O over the processing duration.
+    Items are collected in memory and returned to the producer,
+    which puts them into output queues (producer-driven put).
 
-    Returns (accumulated_result, processed_count, errored_count, emitted_by_tag, processing_ns).
+    Returns (accumulated_result, processed_count, errored_count,
+             emitted_items_by_tag, processing_ns).
     """
     accumulated: BaseResult | None = None
     processed = 0
     errored = 0
     total_processing_ns = 0
     step_outputs = step.outputs
-    emitted_by_tag: dict[str, int] = {}
+    emitted_items_by_tag: dict[str, list[Any]] = {}
 
-    def _direct_emit(item: Any, tag: str) -> None:
+    def _collect_emit(item: Any, tag: str) -> None:
         if not step_outputs:
             raise RuntimeError(f"Step '{step.name}' has no declared outputs — emit() not allowed")
-        tag_queues = _worker_output_queues.get(tag)
-        if tag_queues is None:
-            return
-        for q in tag_queues:
-            q.put(item)
-        emitted_by_tag[tag] = emitted_by_tag.get(tag, 0) + 1
+        emitted_items_by_tag.setdefault(tag, []).append(item)
 
     for item in chunk:
         try:
             t0 = time.monotonic_ns()
-            result = step.process(item, state, _direct_emit)
+            result = step.process(item, state, _collect_emit)
             total_processing_ns += time.monotonic_ns() - t0
             accumulated = result if accumulated is None else accumulated.merge(result)
             processed += 1
@@ -341,7 +322,7 @@ def _parallel_worker(
                 exc_info=True,
             )
 
-    return accumulated, processed, errored, emitted_by_tag, total_processing_ns
+    return accumulated, processed, errored, emitted_items_by_tag, total_processing_ns
 
 
 # ---------------------------------------------------------------------------
@@ -363,26 +344,42 @@ class ParallelProducer(BaseProducer):
         self.workers = workers
         self.chunk_size = chunk_size
 
+    def _drain_future_result(
+        self,
+        future_result: tuple[BaseResult | None, int, int, dict[str, list[Any]], int],
+        accumulated: BaseResult | None,
+    ) -> BaseResult | None:
+        """Process a single future's result: update stats, put items into output queues."""
+        chunk_result, processed, errored, emitted_items_by_tag, proc_ns = future_result
+        self.stats.increment(self.step.name, "processed", processed)
+        self.stats.add_processing_ns(self.step.name, proc_ns)
+        if errored:
+            self.stats.increment(self.step.name, "errored", errored)
+        for tag, items in emitted_items_by_tag.items():
+            tag_queues = self.output_queues.get(tag)
+            if tag_queues is None:
+                logger.debug("unconnected tag=%s step=%s — dropped", tag, self.step.name)
+                continue
+            for item in items:
+                for q in tag_queues:
+                    q.put(item)
+            self.stats.increment_emitted(self.step.name, tag, len(items))
+        if chunk_result is not None:
+            accumulated = (
+                chunk_result if accumulated is None else accumulated.merge(chunk_result)
+            )
+        return accumulated
+
     def _collect_completed(
         self,
         futures: list[Any],
         accumulated: BaseResult | None,
     ) -> tuple[list[Any], BaseResult | None]:
-        """Collect results from completed futures, updating stats incrementally."""
+        """Collect results from completed futures, putting items into output queues."""
         remaining = []
         for f in futures:
             if f.done():
-                chunk_result, processed, errored, emitted_by_tag, proc_ns = f.result()
-                self.stats.increment(self.step.name, "processed", processed)
-                self.stats.add_processing_ns(self.step.name, proc_ns)
-                if errored:
-                    self.stats.increment(self.step.name, "errored", errored)
-                for tag, count in emitted_by_tag.items():
-                    self.stats.increment_emitted(self.step.name, tag, count)
-                if chunk_result is not None:
-                    accumulated = (
-                        chunk_result if accumulated is None else accumulated.merge(chunk_result)
-                    )
+                accumulated = self._drain_future_result(f.result(), accumulated)
             else:
                 remaining.append(f)
         return remaining, accumulated
@@ -401,8 +398,6 @@ class ParallelProducer(BaseProducer):
             executor = ProcessPoolExecutor(
                 max_workers=self.workers,
                 mp_context=ctx,
-                initializer=_init_worker,
-                initargs=(self.output_queues,),
             )
             try:
                 chunk: list[Any] = []
@@ -454,19 +449,7 @@ class ParallelProducer(BaseProducer):
 
                 # Collect remaining results
                 for future in as_completed(futures):
-                    chunk_result, processed, errored, emitted_by_tag, proc_ns = future.result()
-                    self.stats.increment(self.step.name, "processed", processed)
-                    self.stats.add_processing_ns(self.step.name, proc_ns)
-                    if errored:
-                        self.stats.increment(self.step.name, "errored", errored)
-                    for tag, count in emitted_by_tag.items():
-                        self.stats.increment_emitted(self.step.name, tag, count)
-                    if chunk_result is not None:
-                        accumulated = (
-                            chunk_result
-                            if accumulated is None
-                            else accumulated.merge(chunk_result)
-                        )
+                    accumulated = self._drain_future_result(future.result(), accumulated)
                 # 모든 아이템 처리 완료 → sentinel 먼저 전파
                 self._send_sentinel()
                 # 처리 완료 시점 기록 (executor cleanup 대기 시간 제외)
