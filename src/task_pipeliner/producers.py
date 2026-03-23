@@ -302,28 +302,33 @@ def _parallel_worker(
 ) -> tuple[BaseResult | None, int, int, dict[str, int], int]:
     """Process a chunk of items in a worker process.
 
-    Items are collected locally during processing, then put into
-    output queues in bulk after the chunk is done — reduces lock
-    contention compared to per-item put.
+    Items are emitted directly to output queues during processing
+    (streaming put) — avoids buffering large numbers of items in memory
+    and spreads pipe I/O over the processing duration.
 
     Returns (accumulated_result, processed_count, errored_count, emitted_by_tag, processing_ns).
     """
     accumulated: BaseResult | None = None
-    emitted: list[tuple[Any, str]] = []
     processed = 0
     errored = 0
     total_processing_ns = 0
     step_outputs = step.outputs
+    emitted_by_tag: dict[str, int] = {}
 
-    def _buffer_emit(item: Any, tag: str) -> None:
+    def _direct_emit(item: Any, tag: str) -> None:
         if not step_outputs:
             raise RuntimeError(f"Step '{step.name}' has no declared outputs — emit() not allowed")
-        emitted.append((item, tag))
+        tag_queues = _worker_output_queues.get(tag)
+        if tag_queues is None:
+            return
+        for q in tag_queues:
+            q.put(item)
+        emitted_by_tag[tag] = emitted_by_tag.get(tag, 0) + 1
 
     for item in chunk:
         try:
             t0 = time.monotonic_ns()
-            result = step.process(item, state, _buffer_emit)
+            result = step.process(item, state, _direct_emit)
             total_processing_ns += time.monotonic_ns() - t0
             accumulated = result if accumulated is None else accumulated.merge(result)
             processed += 1
@@ -335,17 +340,6 @@ def _parallel_worker(
                 repr(item)[:200],
                 exc_info=True,
             )
-
-    # Bulk put — tag-based routing
-    emitted_by_tag: dict[str, int] = {}
-    for out_item, tag in emitted:
-        tag_queues = _worker_output_queues.get(tag)
-        if tag_queues is None:
-            logger.debug("unconnected tag=%s step=%s — dropped", tag, step.name)
-            continue
-        for q in tag_queues:
-            q.put(out_item)
-        emitted_by_tag[tag] = emitted_by_tag.get(tag, 0) + 1
 
     return accumulated, processed, errored, emitted_by_tag, total_processing_ns
 
