@@ -1,6 +1,6 @@
 <p align="center">
   <strong>task-pipeliner</strong><br/>
-  <em>Define steps. Connect with YAML. Your pipeline is ready.</em>
+  <em>Step을 정의하고, YAML로 연결하면 파이프라인이 완성됩니다.</em>
 </p>
 
 <p align="center">
@@ -10,47 +10,47 @@
 </p>
 
 <p align="center">
-  <a href="./README-ko.md">한국어</a>
+  <a href="./README.md">English</a>
 </p>
 
 ---
 
 ## Why task-pipeliner?
 
-Every data pipeline needs the same plumbing — queue wiring, process management, shutdown signals, error handling, stats collection. task-pipeliner **eliminates all that boilerplate**. You define a Step class; the framework handles the rest.
+데이터 파이프라인을 만들 때마다 반복되는 코드가 있습니다 — 큐 연결, 프로세스 관리, 종료 시그널, 에러 핸들링, 통계 수집. task-pipeliner는 이 **boilerplate를 모두 제거**하고, **Step 클래스 하나만 정의하면 나머지는 프레임워크가 처리**합니다.
 
-### Key Strengths
+### 핵심 강점
 
-**Mix stateful and stateless steps freely** — Chain a sequential step that holds a DB connection with a parallel step that fans out across CPU cores, all in one pipeline.
+**Stateful + Stateless를 자유롭게 혼합** — DB 커넥션을 유지하는 순차 Step과 CPU를 풀로 활용하는 병렬 Step을 하나의 파이프라인에서 자연스럽게 연결합니다.
 
-**Item-level streaming** — Items flow through queues one by one, not in bulk batches. Memory stays flat and every step runs concurrently.
+**아이템 스트리밍** — 배치가 아니라 아이템이 하나씩 큐를 타고 흐릅니다. 메모리 효율이 높고, 각 Step이 동시에 동작합니다.
 
-**YAML-driven topology** — Rewire steps, change parameters, add fan-out/fan-in — all without touching code.
+**YAML 한 장으로 토폴로지 정의** — Step 간 연결, 파라미터, Fan-out/Fan-in을 코드 수정 없이 설정만으로 변경합니다.
 
-**Zero infrastructure** — No Redis, no broker, no daemon. Pure Python, `pip install` and go.
+**`pip install` 하나면 끝** — Redis, broker, 데몬 없이 순수 Python만으로 동작합니다.
 
 ---
 
-## How It Works
+## 파이프라인 구조
 
 ```
 SourceStep ──→ Queue ──→ ParallelStep ──→ Queue ──→ SequentialStep
- (produce)      (auto)   (N workers,       (auto)    (stateful,
-                          CPU-bound)                   single-thread)
+ (데이터 생성)     (자동)   (N workers,       (자동)    (stateful,
+                           CPU-bound)                  single-thread)
 ```
 
-> Define your steps. Queue wiring, process spawning, sentinel shutdown, and stats collection are all automatic.
+> Step을 정의하면 Queue 연결, 프로세스 생성, Sentinel 종료, 통계 수집은 모두 자동으로 처리됩니다.
 
 ---
 
-## Installation
+## 설치
 
 ```bash
 pip install "task-pipeliner @ git+https://github.com/agent-hanju/task-pipeliner.git@v0.1.0"
 ```
 
 <details>
-<summary>Add as a dependency in pyproject.toml</summary>
+<summary>pyproject.toml에 의존성으로 추가</summary>
 
 ```toml
 dependencies = [
@@ -60,7 +60,7 @@ dependencies = [
 </details>
 
 <details>
-<summary>Install from source (development)</summary>
+<summary>소스에서 개발 설치</summary>
 
 ```bash
 git clone https://github.com/agent-hanju/task-pipeliner.git
@@ -75,7 +75,7 @@ python -m venv .venv
 
 ## Quick Start
 
-### 1. Define your steps
+### 1. Step 정의
 
 ```python
 # steps.py
@@ -87,7 +87,7 @@ from task_pipeliner import ParallelStep, SequentialStep, SourceStep, Worker
 
 
 class LoaderStep(SourceStep):
-    """Reads lines from text files."""
+    """텍스트 파일에서 라인을 읽어 아이템으로 생성"""
     outputs = ("main",)
 
     def __init__(self, paths: list[str] | None = None, **_: Any) -> None:
@@ -101,7 +101,7 @@ class LoaderStep(SourceStep):
 
 
 class FilterWorker(Worker):
-    """Filters items by text length."""
+    """텍스트 길이 기반 필터링 워커"""
 
     def __init__(self, min_length: int) -> None:
         self._min_length = min_length
@@ -114,7 +114,7 @@ class FilterWorker(Worker):
 
 
 class FilterStep(ParallelStep):
-    """Parallel filtering across N workers."""
+    """N개 워커로 병렬 필터링"""
     outputs = ("kept", "removed")
 
     def __init__(self, min_length: int = 10, **_: Any) -> None:
@@ -125,7 +125,7 @@ class FilterStep(ParallelStep):
 
 
 class WriterStep(SequentialStep):
-    """Writes items to a JSONL file (sequential, stateful)."""
+    """JSONL 파일 작성 (순차, stateful)"""
     outputs = ()  # terminal step
 
     def __init__(self, output_path: str = "output.jsonl", **_: Any) -> None:
@@ -143,7 +143,7 @@ class WriterStep(SequentialStep):
         self._fh.close()
 ```
 
-### 2. Wire them with YAML
+### 2. YAML로 파이프라인 연결
 
 ```yaml
 # pipeline_config.yaml
@@ -166,7 +166,7 @@ execution:
   chunk_size: 100
 ```
 
-### 3. Run
+### 3. 실행
 
 ```python
 # run.py
@@ -185,13 +185,13 @@ pipeline.run(config=Path("pipeline_config.yaml"), output_dir=Path("./output"))
 
 ---
 
-## Step Types
+## Step 타입
 
-Three ABCs — pick the one that fits your workload.
+세 가지 ABC를 상속받아 Step을 만듭니다.
 
-### SourceStep — Produce Data
+### SourceStep — 데이터 생성
 
-Entry point of the pipeline. Yields items from `items()`.
+파이프라인의 시작점. `items()`에서 아이템을 yield합니다.
 
 ```python
 class MySource(SourceStep):
@@ -202,20 +202,20 @@ class MySource(SourceStep):
             yield record
 ```
 
-### ParallelStep — Distribute Work
+### ParallelStep — 병렬 처리
 
-Spreads CPU-bound work across N worker processes. Define a separate `Worker` class.
+CPU-bound 작업을 N개 워커 프로세스로 분산합니다. `Worker` 클래스를 별도 정의합니다.
 
 ```python
 class MyWorker(Worker):
-    def open(self):                         # once per worker process
+    def open(self):                         # 워커 프로세스 시작 시 1회
         self._model = load_model()
 
-    def process(self, item, state, emit):   # called per item
+    def process(self, item, state, emit):   # 아이템마다 호출
         result = self._model.predict(item)
         emit(result, "main")
 
-    def close(self):                        # once per worker process
+    def close(self):                        # 워커 프로세스 종료 시 1회
         del self._model
 
 class MyParallelStep(ParallelStep):
@@ -225,7 +225,7 @@ class MyParallelStep(ParallelStep):
         return MyWorker()
 ```
 
-**Worker lifecycle:**
+**Worker 라이프사이클:**
 
 ```
 Main process                        Worker process (x N)
@@ -239,9 +239,9 @@ step.open()                         worker.open()
 step.close()
 ```
 
-### SequentialStep — Stateful Processing
+### SequentialStep — 순차 처리
 
-Processes items one by one in the main thread. Ideal for file handles, DB connections, or order-dependent logic.
+파일 핸들, DB 커넥션 등 **상태를 유지하며** 순서대로 처리합니다.
 
 ```python
 class MyWriter(SequentialStep):
@@ -257,43 +257,43 @@ class MyWriter(SequentialStep):
         self._conn.close()
 ```
 
-### Common Interface (StepBase)
+### 공통 인터페이스 (StepBase)
 
-| Method / Property | Required | Description |
+| Method / Property | 필수 | 설명 |
 |---|---|---|
-| `outputs` | ClassVar | Tuple of declared output tags. `()` = terminal step |
-| `open()` / `close()` | Optional | Acquire/release resources (main process) |
-| `initial_state` | Optional | Returns initial state object |
-| `is_ready(state)` | Optional | Block processing until state is available (default: `True`) |
-| `get_output_state()` | Optional | Dispatch state to other steps after `close()` |
+| `outputs` | ClassVar | 선언된 출력 태그 튜플. `()` = terminal step |
+| `open()` / `close()` | Optional | 리소스 획득/해제 (메인 프로세스) |
+| `initial_state` | Optional | 초기 state 객체 반환 |
+| `is_ready(state)` | Optional | state가 준비될 때까지 처리 차단 (기본: `True`) |
+| `get_output_state()` | Optional | `close()` 후 다른 Step에 state 전달 |
 
 ---
 
-## YAML Configuration
+## YAML 설정
 
-### Structure
+### 기본 구조
 
 ```yaml
 pipeline:
-  - type: step_name          # Registered step class name
-    name: instance_name       # Instance name (defaults to type)
-    enabled: true             # Set false to skip
-    param1: value1            # Passed as Step.__init__(**kwargs)
+  - type: step_name          # 등록된 Step 클래스 이름
+    name: instance_name       # 인스턴스 이름 (기본값: type)
+    enabled: true             # false로 비활성화 가능
+    param1: value1            # Step.__init__(**kwargs)로 전달
     outputs:
-      kept: next_step         # Single target
-      removed:                # Multiple targets (fan-out)
+      kept: next_step         # 단일 대상
+      removed:                # 복수 대상 (fan-out)
         - step_a
         - step_b
 
 execution:
-  workers: 4                  # Parallel worker count
-  queue_size: 0               # Queue capacity (0 = unbounded)
-  chunk_size: 100             # Items per worker batch
+  workers: 4                  # 병렬 워커 수
+  queue_size: 0               # 큐 크기 (0 = 무제한)
+  chunk_size: 100             # 워커당 배치 크기
 ```
 
-### Variable Substitution
+### 변수 치환
 
-Use `${var}` placeholders, resolved at runtime.
+`${var}` 플레이스홀더를 런타임에 치환합니다.
 
 ```yaml
 pipeline:
@@ -313,29 +313,29 @@ pipeline.run(
 )
 ```
 
-| YAML Value | Variable | Result | Type |
+| YAML 값 | 변수 값 | 결과 | 타입 |
 |---|---|---|---|
 | `${input_dir}` | `"/data"` | `"/data"` | `str` |
 | `${paths}` | `["/a.jsonl", "/b.jsonl"]` | `["/a.jsonl", "/b.jsonl"]` | `list` |
 | `${threshold}` | `42` | `42` | `int` |
 | `${output_dir}/result.jsonl` | `"/out"` | `"/out/result.jsonl"` | `str` |
-| `${mode:-fast}` | *(not provided)* | `"fast"` | `str` (default) |
-| `$${NOT_A_VAR}` | — | `"${NOT_A_VAR}"` | `str` (escaped) |
+| `${mode:-fast}` | *(미제공)* | `"fast"` | `str` (기본값) |
+| `$${NOT_A_VAR}` | — | `"${NOT_A_VAR}"` | `str` (이스케이프) |
 
-### Config Rules
+### 설정 규칙
 
-- First step must be a `SourceStep`. No `SourceStep` allowed after the first.
-- Each step `name` must be unique. Defaults to `type` when omitted.
-- `outputs` tags reference step names (not types).
-- Steps with `outputs = ()` are terminal — calling `emit()` raises `RuntimeError`.
+- 첫 번째 Step은 반드시 `SourceStep`. 이후에는 `SourceStep` 불가.
+- 각 Step의 `name`은 유일해야 함. 생략 시 `type`이 기본값.
+- `outputs` 태그는 Step의 `name`을 참조.
+- `outputs = ()` Step은 terminal — `emit()` 호출 시 `RuntimeError`.
 
 ---
 
-## Advanced Features
+## 고급 기능
 
 ### Fan-out / Fan-in
 
-**Fan-out** — Route items to different steps by tag:
+**Fan-out** — 태그에 따라 서로 다른 Step으로 분기:
 
 ```yaml
 - type: classifier
@@ -344,18 +344,18 @@ pipeline.run(
     category_b: processor_b
 ```
 
-**Fan-in** — Multiple steps feed into one:
+**Fan-in** — 여러 Step이 하나의 Step에 합류:
 
 ```yaml
 - type: processor_a
   outputs: { done: writer }
 - type: processor_b
-  outputs: { done: writer }   # both converge into writer
+  outputs: { done: writer }   # 둘 다 writer로 합류
 ```
 
-### Multiple Instances of the Same Type
+### 같은 타입의 Step을 여러 인스턴스로
 
-Use `name` to create distinct instances with different configs.
+`name`으로 구분하여 동일 타입을 다른 설정으로 복수 생성합니다.
 
 ```yaml
 pipeline:
@@ -382,13 +382,13 @@ pipeline:
     output_path: ./removed.jsonl
 ```
 
-### State Gating — Two-Pass Algorithms
+### State Gating — 2-Pass 알고리즘
 
-Collect statistics in pass 1, then use them in pass 2.
+1단계에서 통계를 수집하고, 2단계에서 그 통계를 기반으로 처리하는 패턴입니다.
 
 ```python
 class CollectorStep(SequentialStep):
-    """Pass 1: accumulate stats while forwarding items."""
+    """Pass 1: 통계 수집 + 아이템 포워딩"""
     outputs = ("main",)
 
     def process(self, item, state, emit):
@@ -400,7 +400,7 @@ class CollectorStep(SequentialStep):
 
 
 class CleanerStep(SequentialStep):
-    """Pass 2: process items using collected stats (blocks until state arrives)."""
+    """Pass 2: 수집된 통계로 처리 (state 도착까지 대기)"""
     outputs = ("kept",)
 
     def is_ready(self, state):
@@ -411,15 +411,15 @@ class CleanerStep(SequentialStep):
         emit(cleaned, "kept")
 ```
 
-> `CleanerStep` queues incoming items while `is_ready()` returns `False`. Once `CollectorStep.close()` completes and dispatches state, the gated step unblocks and processes everything.
+> `CleanerStep`은 `is_ready()`가 `True`를 반환할 때까지 아이템을 큐에 쌓아두고, `CollectorStep.close()` 후 state가 전달되면 일괄 처리를 시작합니다.
 
 ### Graceful Shutdown
 
-`SIGINT` (Ctrl+C) and `SIGBREAK` (Windows) inject sentinels into all queues for clean termination. Statistics are preserved.
+`SIGINT` (Ctrl+C) / `SIGBREAK` (Windows) 수신 시 모든 큐에 sentinel을 주입하여 깔끔하게 종료합니다. 통계는 보존됩니다.
 
-### Live Progress
+### 실시간 진행 상황
 
-Real-time progress is printed to stderr and saved to `progress.log`:
+실행 중 stderr와 `progress.log`에 실시간 현황이 표시됩니다.
 
 ```
 --- Pipeline Progress (12.3s) -------------------------------------------
@@ -429,9 +429,9 @@ Real-time progress is printed to stderr and saved to `progress.log`:
 -------------------------------------------------------------------------
 ```
 
-### Execution Statistics
+### 실행 통계
 
-After completion, `stats.json` contains per-step metrics:
+완료 후 `output/stats.json`에 Step별 상세 메트릭이 기록됩니다.
 
 ```json
 [
@@ -451,31 +451,31 @@ After completion, `stats.json` contains per-step metrics:
 
 ---
 
-## Constraints
+## 사용 시 주의사항
 
-| Rule | Why |
+| 규칙 | 이유 |
 |---|---|
-| Define Step and Worker classes at **module level** | Spawn-mode pickle compatibility |
-| Do NOT acquire resources in `__init__` | Use `open()` / `close()` instead |
-| No lambdas, closures, or nested classes | Not picklable (`functools.partial` is OK) |
-| Picklability is validated at registration | Catches errors early |
+| Step, Worker 클래스는 **모듈 최상위**에 정의 | spawn 모드 pickle 호환 |
+| `__init__`에서 리소스(파일, 커넥션) 획득 금지 | `open()`에서 획득, `close()`에서 해제 |
+| lambda, 클로저, 내부 클래스 사용 금지 | pickle 불가 (`functools.partial`은 허용) |
+| 등록 시 picklability 자동 검증 | 런타임 에러 방지 |
 
 ---
 
 ## API Reference
 
-| Class | Module | Description |
+| Class | Module | 설명 |
 |---|---|---|
-| `Pipeline` | `task_pipeliner.pipeline` | Register steps and run pipelines |
-| `SourceStep` | `task_pipeliner.base` | ABC for data-producing steps |
-| `SequentialStep` | `task_pipeliner.base` | ABC for stateful sequential steps |
-| `ParallelStep` | `task_pipeliner.base` | ABC for parallel multi-worker steps |
-| `Worker` | `task_pipeliner.base` | ABC for worker process objects |
-| `load_config(path, variables)` | `task_pipeliner.config` | Load YAML config with `${var}` substitution |
-| `PipelineConfig` | `task_pipeliner.config` | Pipeline configuration model |
-| `PipelineError` | `task_pipeliner.exceptions` | Base exception |
-| `StepRegistrationError` | `task_pipeliner.exceptions` | Registration error |
-| `ConfigValidationError` | `task_pipeliner.exceptions` | Config validation error |
+| `Pipeline` | `task_pipeliner.pipeline` | Step 등록 및 파이프라인 실행 |
+| `SourceStep` | `task_pipeliner.base` | 데이터 생성 Step (ABC) |
+| `SequentialStep` | `task_pipeliner.base` | 순차 처리 Step (ABC) |
+| `ParallelStep` | `task_pipeliner.base` | 병렬 처리 Step (ABC) |
+| `Worker` | `task_pipeliner.base` | 워커 프로세스용 객체 (ABC) |
+| `load_config(path, variables)` | `task_pipeliner.config` | YAML 설정 로드 + 변수 치환 |
+| `PipelineConfig` | `task_pipeliner.config` | 파이프라인 설정 모델 |
+| `PipelineError` | `task_pipeliner.exceptions` | 기본 예외 |
+| `StepRegistrationError` | `task_pipeliner.exceptions` | 등록 오류 |
+| `ConfigValidationError` | `task_pipeliner.exceptions` | 설정 검증 오류 |
 
 ---
 
