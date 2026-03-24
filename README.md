@@ -339,7 +339,7 @@ class CleanerStep(SequentialStep):
         emit(cleaned, "kept")
 ```
 
-Items queue up in `CleanerStep` while `is_ready()` returns `False`. Once `CollectorStep.close()` completes and the Producer calls `get_output_state()`, the returned state is dispatched to the gated step, which unblocks and processes all queued items.
+Items queue up in `CleanerStep` while `is_ready()` returns `False`. Once `CollectorStep.close()` completes and the StepRunner calls `get_output_state()`, the returned state is dispatched to the gated step, which unblocks and processes all queued items.
 
 ### Graceful Shutdown
 
@@ -438,6 +438,12 @@ task-pipeliner batch jobs.json
 | `StepConfig` | `task_pipeliner.config` | Pydantic model for step config |
 | `ExecutionConfig` | `task_pipeliner.config` | Pydantic model for execution settings |
 | `load_config(path)` | `task_pipeliner.config` | Load and validate YAML config |
+
+## Changelog
+
+### v0.2.1
+
+내부 클래스명을 `*Producer` → `*StepRunner`로 변경하고, 구현을 `producers.py` → `step_runners.py`로 이동. 기존 `producers.py`는 re-export shim으로 유지되므로 외부 API 변경 없음.
 
 ## License
 

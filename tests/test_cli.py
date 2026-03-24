@@ -44,7 +44,11 @@ class TestPipeline:
             yaml.dump(
                 {
                     "pipeline": [
-                        {"type": "source", "items": [str(input_file)], "outputs": {"main": "passthrough"}},
+                        {
+                            "type": "source",
+                            "items": [str(input_file)],
+                            "outputs": {"main": "passthrough"},
+                        },
                         {"type": "passthrough"},
                     ],
                     "execution": {"workers": 1, "queue_size": 50, "chunk_size": 20},
@@ -129,7 +133,11 @@ class TestRunCommand:
             yaml.dump(
                 {
                     "pipeline": [
-                        {"type": "source", "items": [str(input_file)], "outputs": {"main": "passthrough"}},
+                        {
+                            "type": "source",
+                            "items": [str(input_file)],
+                            "outputs": {"main": "passthrough"},
+                        },
                         {"type": "passthrough"},
                     ],
                     "execution": {"workers": 1, "queue_size": 50, "chunk_size": 20},
@@ -215,7 +223,11 @@ class TestBatchCommand:
                 yaml.dump(
                     {
                         "pipeline": [
-                            {"type": "source", "items": [str(input_file)], "outputs": {"main": "passthrough"}},
+                            {
+                                "type": "source",
+                                "items": [str(input_file)],
+                                "outputs": {"main": "passthrough"},
+                            },
                             {"type": "passthrough"},
                         ],
                         "execution": {"workers": 1, "queue_size": 50, "chunk_size": 20},

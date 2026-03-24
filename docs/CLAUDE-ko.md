@@ -102,7 +102,7 @@ logger = logging.getLogger(__name__)  # → "task_pipeliner.config"
 ```
 
 - 부모 로거 `task_pipeliner`가 핸들러를 소유한다 (`StatsCollector.setup_log_handler`에서 설정).
-- 자식 로거(`task_pipeliner.config`, `task_pipeliner.producers`, …)는 자동으로 부모에 전파한다.
+- 자식 로거(`task_pipeliner.config`, `task_pipeliner.step_runners`, …)는 자동으로 부모에 전파한다.
 - Formatter에 모듈, 함수, 라인이 포함되므로 메시지에 함수명을 수동으로 적을 필요 없다.
 
 **로그 포맷:**
@@ -162,7 +162,7 @@ def do_something(self, path: Path, count: int) -> Result:
 - `config.py` — INFO: config 로드 (경로, step 수). WARNING: step 비활성.
 - `io.py` — INFO: reader 열림 (파일 수), writer open/close (출력 경로).
 - `stats.py` — INFO: stats JSON 작성. WARNING: 쓰기 실패 억제.
-- `producers.py` — INFO: producer 시작/종료 (step 이름), sentinel 송수신. WARNING: `process()` 예외 (아이템 skip, 잘라낸 repr 포함).
+- `step_runners.py` — INFO: step runner 시작/종료 (step 이름), sentinel 송수신. WARNING: `process()` 예외 (아이템 skip, 잘라낸 repr 포함).
 - `engine.py` — INFO: 파이프라인 시작 (step 수, worker 수), 파이프라인 완료. WARNING: process join 타임아웃. ERROR: 시그널에 의한 셧다운, worker 프로세스 crash.
 - `pipeline.py` — INFO: 파이프라인 실행 시작/완료 (config 경로, input 수).
 - `cli.py` — 로깅 설정만 (루트 핸들러 구성). 직접 로그 호출 불필요.

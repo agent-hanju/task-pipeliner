@@ -8,13 +8,13 @@ from typing import Any
 import pytest
 from dummy_steps import ErrorOnItemStep, SequentialErrorOnItemStep
 
-from task_pipeliner.producers import (
-    ParallelProducer,
+from task_pipeliner.stats import StatsCollector
+from task_pipeliner.step_runners import (
+    ParallelStepRunner,
     Sentinel,
-    SequentialProducer,
+    SequentialStepRunner,
     is_sentinel,
 )
-from task_pipeliner.stats import StatsCollector
 
 
 class TestErrorHandlingSequential:
@@ -33,7 +33,7 @@ class TestErrorHandlingSequential:
             in_q.put(item)
         in_q.put(Sentinel())
 
-        producer = SequentialProducer(
+        producer = SequentialStepRunner(
             step=SequentialErrorOnItemStep(error_value=error_value),
             step_name=self._STEP_NAME,
             input_queue=in_q,
@@ -97,7 +97,7 @@ class TestErrorHandlingSequential:
         in_q.put(-1)
         in_q.put(Sentinel())
 
-        producer = SequentialProducer(
+        producer = SequentialStepRunner(
             step=SequentialErrorOnItemStep(error_value=-1),
             step_name=self._STEP_NAME,
             input_queue=in_q,
@@ -123,7 +123,7 @@ class TestErrorHandlingParallel:
 
     @pytest.mark.timeout(30)
     def test_worker_exception_reflected_in_stats(self) -> None:
-        """ParallelProducer worker exception → stats.errored reflects it."""
+        """ParallelStepRunner worker exception → stats.errored reflects it."""
         ctx = multiprocessing.get_context("spawn")
         in_q: multiprocessing.Queue[Any] = ctx.Queue()
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
@@ -135,7 +135,7 @@ class TestErrorHandlingParallel:
             in_q.put(item)
         in_q.put(Sentinel())
 
-        producer = ParallelProducer(
+        producer = ParallelStepRunner(
             step=ErrorOnItemStep(error_value=-1),
             step_name=self._STEP_NAME,
             input_queue=in_q,
@@ -171,7 +171,7 @@ class TestErrorHandlingParallel:
             in_q.put(item)
         in_q.put(Sentinel())
 
-        producer = ParallelProducer(
+        producer = ParallelStepRunner(
             step=ErrorOnItemStep(error_value=-1),
             step_name=self._STEP_NAME,
             input_queue=in_q,

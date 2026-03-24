@@ -126,7 +126,7 @@ logger = logging.getLogger(__name__)  # → "task_pipeliner.config"
 ```
 
 - Parent logger `task_pipeliner` owns the handler (set up by `StatsCollector.setup_log_handler`).
-- Child loggers (`task_pipeliner.config`, `task_pipeliner.producers`, …) propagate to it automatically.
+- Child loggers (`task_pipeliner.config`, `task_pipeliner.step_runners`, …) propagate to it automatically.
 - The formatter includes module, function, and line — no need to manually write function names in messages.
 
 **Log format:**
@@ -186,7 +186,7 @@ Key points:
 - `config.py` — INFO: config loaded (path, step count). WARNING: step disabled.
 - `io.py` — INFO: reader opened (file count), writer opened/closed (output path).
 - `stats.py` — INFO: stats JSON written. WARNING: write failure suppressed.
-- `producers.py` — INFO: producer started/finished (step name), sentinel sent/received. WARNING: `process()` exception (item skipped, with truncated repr).
+- `step_runners.py` — INFO: step runner started/finished (step name), sentinel sent/received. WARNING: `process()` exception (item skipped, with truncated repr).
 - `engine.py` — INFO: pipeline started (step count, worker count), pipeline completed. WARNING: process join timeout. ERROR: signal-triggered shutdown, worker process crash.
 - `pipeline.py` — INFO: pipeline run started/completed (config path, input count).
 - `cli.py` — Logging setup only (configures root handler). No direct log calls needed.

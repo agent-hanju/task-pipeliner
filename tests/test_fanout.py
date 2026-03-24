@@ -9,8 +9,8 @@ from typing import Any
 import pytest
 from dummy_steps import SequentialPassthroughStep, StateAwareStep
 
-from task_pipeliner.producers import Sentinel, SequentialProducer, is_sentinel
 from task_pipeliner.stats import StatsCollector
+from task_pipeliner.step_runners import Sentinel, SequentialStepRunner, is_sentinel
 
 
 class TestFanOut:
@@ -32,7 +32,7 @@ class TestFanOut:
             in_q.put(item)
         in_q.put(Sentinel())
 
-        producer = SequentialProducer(
+        producer = SequentialStepRunner(
             step=SequentialPassthroughStep(),
             step_name="SequentialPassthroughStep",
             input_queue=in_q,
@@ -78,7 +78,7 @@ class TestStateEvent:
         evt = ctx.Event()
         # Event NOT set — producer should block
 
-        producer = SequentialProducer(
+        producer = SequentialStepRunner(
             step=SequentialPassthroughStep(),
             step_name="SequentialPassthroughStep",
             input_queue=in_q,
@@ -118,7 +118,7 @@ class TestStateEvent:
         evt_a = ctx.Event()
         evt_b = ctx.Event()
 
-        producer = SequentialProducer(
+        producer = SequentialStepRunner(
             step=SequentialPassthroughStep(),
             step_name="SequentialPassthroughStep",
             input_queue=in_q,
@@ -175,7 +175,7 @@ class TestFanOutEndToEnd:
         source_q.put(Sentinel())
 
         # Source: fan-out to queue_a and queue_b
-        source_producer = SequentialProducer(
+        source_producer = SequentialStepRunner(
             step=SequentialPassthroughStep(),
             step_name="SequentialPassthroughStep",
             input_queue=source_q,
@@ -184,7 +184,7 @@ class TestFanOutEndToEnd:
         )
 
         # Queue A: StateAwareStep, blocked until evt
-        producer_a = SequentialProducer(
+        producer_a = SequentialStepRunner(
             step=StateAwareStep(),
             step_name="StateAwareStep",
             input_queue=queue_a,
@@ -195,7 +195,7 @@ class TestFanOutEndToEnd:
         )
 
         # Queue B: completes immediately, then sets event to unblock A
-        producer_b = SequentialProducer(
+        producer_b = SequentialStepRunner(
             step=SequentialPassthroughStep(),
             step_name="SequentialPassthroughStep",
             input_queue=queue_b,

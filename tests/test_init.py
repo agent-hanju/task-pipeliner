@@ -24,12 +24,37 @@ class TestPublicAPI:
         assert ParallelStep is not None
         assert Worker is not None
 
-    def test_producers_importable(self) -> None:
+    def test_step_runners_importable(self) -> None:
+        from task_pipeliner import (
+            InputStepRunner,
+            ParallelStepRunner,
+            SequentialStepRunner,
+        )
+
+        assert InputStepRunner is not None
+        assert SequentialStepRunner is not None
+        assert ParallelStepRunner is not None
+
+    def test_legacy_producer_aliases_importable(self) -> None:
         from task_pipeliner import InputProducer, ParallelProducer, SequentialProducer
 
         assert InputProducer is not None
         assert SequentialProducer is not None
         assert ParallelProducer is not None
+
+    def test_legacy_aliases_are_same_class(self) -> None:
+        from task_pipeliner import (
+            InputProducer,
+            InputStepRunner,
+            ParallelProducer,
+            ParallelStepRunner,
+            SequentialProducer,
+            SequentialStepRunner,
+        )
+
+        assert InputProducer is InputStepRunner
+        assert SequentialProducer is SequentialStepRunner
+        assert ParallelProducer is ParallelStepRunner
 
     def test_exceptions_importable(self) -> None:
         from task_pipeliner import (
@@ -50,6 +75,9 @@ class TestPublicAPI:
             "SequentialStep",
             "ParallelStep",
             "Worker",
+            "InputStepRunner",
+            "ParallelStepRunner",
+            "SequentialStepRunner",
             "InputProducer",
             "ParallelProducer",
             "SequentialProducer",

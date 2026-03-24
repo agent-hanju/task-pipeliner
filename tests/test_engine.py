@@ -20,8 +20,8 @@ from dummy_steps import (
 
 from task_pipeliner.config import ExecutionConfig, PipelineConfig, StepConfig
 from task_pipeliner.engine import PipelineEngine
-from task_pipeliner.pipeline import StepRegistry
 from task_pipeliner.exceptions import ConfigValidationError, StepRegistrationError
+from task_pipeliner.pipeline import StepRegistry
 from task_pipeliner.stats import StatsCollector
 
 # ---------------------------------------------------------------------------
@@ -405,11 +405,11 @@ class TestInitialStateIntegration:
 
 
 # ---------------------------------------------------------------------------
-# M-06: SequentialProducer timing instrumentation
+# M-06: SequentialStepRunner timing instrumentation
 # ---------------------------------------------------------------------------
 
 
-class TestSequentialProducerTiming:
+class TestSequentialStepRunnerTiming:
     def _make_engine(
         self,
         steps: list[StepConfig],
@@ -497,11 +497,11 @@ class TestSequentialProducerTiming:
 
 
 # ---------------------------------------------------------------------------
-# M-07: ParallelProducer timing instrumentation
+# M-07: ParallelStepRunner timing instrumentation
 # ---------------------------------------------------------------------------
 
 
-class TestParallelProducerTiming:
+class TestParallelStepRunnerTiming:
     def _make_engine(
         self,
         steps: list[StepConfig],
@@ -583,11 +583,11 @@ class TestParallelProducerTiming:
 
 
 # ---------------------------------------------------------------------------
-# M-08: InputProducer instrumentation
+# M-08: InputStepRunner instrumentation
 # ---------------------------------------------------------------------------
 
 
-class TestInputProducerTiming:
+class TestInputStepRunnerTiming:
     def _make_engine(
         self,
         steps: list[StepConfig],

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "task-pipeliner"
-version = "0.2.0"
+version = "0.2.1"
 description = "Python pipeline execution framework for parallel and sequential data processing"
 requires-python = ">=3.12"
 dependencies = [

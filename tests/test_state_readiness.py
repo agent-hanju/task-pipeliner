@@ -20,8 +20,8 @@ from dummy_steps import (
 from task_pipeliner.config import ExecutionConfig, PipelineConfig, StepConfig
 from task_pipeliner.engine import PipelineEngine
 from task_pipeliner.pipeline import StepRegistry
-from task_pipeliner.producers import Sentinel, SequentialProducer
 from task_pipeliner.stats import StatsCollector
+from task_pipeliner.step_runners import Sentinel, SequentialStepRunner
 
 # ---------------------------------------------------------------------------
 # StepBase.is_ready
@@ -86,7 +86,7 @@ class TestProducerStateGating:
 
         state_changed = threading.Event()
 
-        producer = SequentialProducer(
+        producer = SequentialStepRunner(
             step=StateGatedStep(),
             step_name="StateGatedStep",
             input_queue=in_q,
@@ -128,7 +128,7 @@ class TestProducerStateGating:
         in_q.put(99)
         in_q.put(Sentinel())
 
-        producer = SequentialProducer(
+        producer = SequentialStepRunner(
             step=SequentialPassthroughStep(),
             step_name="SequentialPassthroughStep",
             input_queue=in_q,

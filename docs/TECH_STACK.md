@@ -28,7 +28,7 @@ PRD 요구사항(크로스플랫폼, 배포 가능 패키지, 병렬 실행, YAM
 | `logging` | 실시간 로그 파일 flush |
 | `signal` | SIGINT / SIGTERM graceful shutdown |
 | `pathlib` | 파일 경로 처리 |
-| `abc` | 추상 기반 클래스 (BaseStep, BaseProducer 인터페이스) |
+| `abc` | 추상 기반 클래스 (BaseStep, BaseStepRunner 인터페이스) |
 | `dataclasses` | 경량 데이터 구조 |
 | `functools` | `functools.partial` — lambda 대신 pickle 가능한 함수 래핑 |
 | `typing` | 타입 힌트 |
@@ -80,7 +80,7 @@ pip install -e ".[dev]"
 pip install task-pipeliner
 
 # 구현 프로젝트에서 import
-from task_pipeliner import Pipeline, BaseStep, ParallelProducer, SequentialProducer
+from task_pipeliner import Pipeline, BaseStep, ParallelStepRunner, SequentialStepRunner
 ```
 
 ---
@@ -96,7 +96,8 @@ task-pipeliner/
 │   └── task_pipeliner/         # import task_pipeliner
 │       ├── __init__.py         # 공개 API 노출 (Pipeline, BaseStep 등)
 │       ├── base.py             # BaseStep, StepType(PARALLEL/SEQUENTIAL) 추상 인터페이스
-│       ├── producers.py        # ParallelProducer, SequentialProducer 구현
+│       ├── step_runners.py     # ParallelStepRunner, SequentialStepRunner 구현
+│       ├── producers.py        # 하위호환 re-export shim (step_runners → producers)
 │       ├── engine.py           # 실행 엔진 (Queue 연결, sentinel 관리, 통계 수집)
 │       ├── pipeline.py         # Pipeline 클래스 (step 등록, YAML 로딩)
 │       ├── config.py           # pydantic 기반 config 스키마 (PipelineConfig, StepConfig 등)

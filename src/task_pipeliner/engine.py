@@ -1,4 +1,4 @@
-"""Execution engine: DAG queue wiring, producer lifecycle."""
+"""Execution engine: DAG queue wiring, step runner lifecycle."""
 
 from __future__ import annotations
 
@@ -12,14 +12,14 @@ from typing import TYPE_CHECKING, Any
 from task_pipeliner.base import ParallelStep, SourceStep, StepBase
 from task_pipeliner.config import PipelineConfig
 from task_pipeliner.exceptions import ConfigValidationError
-from task_pipeliner.producers import (
-    InputProducer,
-    ParallelProducer,
-    Sentinel,
-    SequentialProducer,
-)
 from task_pipeliner.progress import ProgressReporter
 from task_pipeliner.stats import StatsCollector
+from task_pipeliner.step_runners import (
+    InputStepRunner,
+    ParallelStepRunner,
+    Sentinel,
+    SequentialStepRunner,
+)
 
 if TYPE_CHECKING:
     from task_pipeliner.pipeline import StepRegistry
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 class PipelineEngine:
-    """config에 따라 DAG 큐 토폴로지를 구성하고, Producer들을 생성·실행·정리한다."""
+    """config에 따라 DAG 큐 토폴로지를 구성하고, StepRunner들을 생성·실행·정리한다."""
 
     def __init__(
         self,
@@ -61,7 +61,7 @@ class PipelineEngine:
         큰 흐름:
         1) Step 인스턴스 생성 + SourceStep 검증
         2) DAG 큐 토폴로지 구성 (공유 입력 큐 + sentinel_count)
-        3) Producer 생성 (Sequential / Parallel) + state dispatch
+        3) StepRunner 생성 (Sequential / Parallel) + state dispatch
         4) 스레드 시작 → join 대기
         5) 결과 수집 + stats 저장
         """
@@ -180,33 +180,33 @@ class PipelineEngine:
                 sentinel_count_for[step_name] = 1
 
         # ======================================================================
-        # 4단계: Producer 생성
+        # 4단계: StepRunner 생성
         # ======================================================================
 
-        # SOURCE step 전용 InputProducer — items()를 호출해서 출력 큐에 넣는다
-        input_producer = InputProducer(
+        # SOURCE step 전용 InputStepRunner — items()를 호출해서 출력 큐에 넣는다
+        input_runner = InputStepRunner(
             step=source_step,
             step_name=source_name,
             output_queues=output_queues_map[source_name],
             stats=self.stats,
         )
 
-        # 나머지 step들의 Producer 생성
+        # 나머지 step들의 StepRunner 생성
         #
-        # state_dispatch 콜백: Producer가 step.close() 후 get_output_state()를
+        # state_dispatch 콜백: StepRunner가 step.close() 후 get_output_state()를
         # 호출하고, 반환된 {target_name: state} 매핑을 이 콜백으로 dispatch한다.
-        # producer_by_name / state_events를 클로저로 캡처하므로,
-        # Producer 생성 후에도 새로 추가된 Producer를 참조할 수 있다.
-        producers: list[SequentialProducer | ParallelProducer] = []
-        producer_by_name: dict[str, SequentialProducer | ParallelProducer] = {}
+        # runner_by_name / state_events를 클로저로 캡처하므로,
+        # StepRunner 생성 후에도 새로 추가된 StepRunner를 참조할 수 있다.
+        runners: list[SequentialStepRunner | ParallelStepRunner] = []
+        runner_by_name: dict[str, SequentialStepRunner | ParallelStepRunner] = {}
         state_events: dict[str, threading.Event] = {}
 
         def _state_dispatch(target_name: str, state: Any) -> None:
-            target = producer_by_name.get(target_name)
+            target = runner_by_name.get(target_name)
             if target is None:
                 raise ValueError(
                     f"state dispatch target '{target_name}' not found. "
-                    f"Available: {sorted(producer_by_name.keys())}"
+                    f"Available: {sorted(runner_by_name.keys())}"
                 )
             target.state = state
             target_evt = state_events.get(target_name)
@@ -221,12 +221,12 @@ class PipelineEngine:
             evt = threading.Event()
             state_events[step_name] = evt
 
-            # ParallelStep → ProcessPoolExecutor 기반 ParallelProducer
-            # SequentialStep → 단일 스레드 SequentialProducer
-            p: SequentialProducer | ParallelProducer
+            # ParallelStep → ProcessPoolExecutor 기반 ParallelStepRunner
+            # SequentialStep → 단일 스레드 SequentialStepRunner
+            p: SequentialStepRunner | ParallelStepRunner
             sc = sentinel_count_for[step_name]
             if isinstance(step, ParallelStep):
-                p = ParallelProducer(
+                p = ParallelStepRunner(
                     step=step,
                     step_name=step_name,
                     input_queue=in_q,
@@ -240,7 +240,7 @@ class PipelineEngine:
                     state_dispatch=_state_dispatch,
                 )
             else:
-                p = SequentialProducer(
+                p = SequentialStepRunner(
                     step=step,
                     step_name=step_name,
                     input_queue=in_q,
@@ -251,10 +251,10 @@ class PipelineEngine:
                     state_changed_event=evt,
                     state_dispatch=_state_dispatch,
                 )
-            producers.append(p)
-            producer_by_name[step_name] = p
+            runners.append(p)
+            runner_by_name[step_name] = p
 
-        logger.debug("built %d producers", len(producers))
+        logger.debug("built %d step runners", len(runners))
 
         # ======================================================================
         # 5단계: 스레드 시작 + 실행 대기
@@ -262,10 +262,10 @@ class PipelineEngine:
 
         # 진행률 표시에 사용할 step 이름 목록
         step_names = [cfg.name for cfg in enabled_cfgs]
-        # InputProducer는 별도 스레드에서 실행
-        feeder = threading.Thread(target=input_producer.run, daemon=True)
-        # 각 Producer도 별도 스레드에서 실행
-        producer_threads = [threading.Thread(target=p.run, daemon=True) for p in producers]
+        # InputStepRunner는 별도 스레드에서 실행
+        feeder = threading.Thread(target=input_runner.run, daemon=True)
+        # 각 StepRunner도 별도 스레드에서 실행
+        runner_threads = [threading.Thread(target=p.run, daemon=True) for p in runners]
 
         # Ctrl+C / SIGBREAK 시 graceful shutdown을 위한 이벤트
         shutdown_event = threading.Event()
@@ -303,7 +303,7 @@ class PipelineEngine:
 
             # 모든 스레드 시작
             feeder.start()
-            for t in producer_threads:
+            for t in runner_threads:
                 t.start()
 
             # 스레드 종료 대기
@@ -311,7 +311,7 @@ class PipelineEngine:
             # 시그널 종료: 5초 타임아웃 후 강제 sentinel 주입
             join_timeout = 5 if shutdown_event.is_set() else None
             feeder.join(timeout=join_timeout)
-            for t in producer_threads:
+            for t in runner_threads:
                 t.join(timeout=join_timeout)
 
             # 시그널로 종료된 경우 — 모든 큐에 sentinel을 강제 주입하여 스레드 탈출 유도
@@ -321,13 +321,13 @@ class PipelineEngine:
                         q.put_nowait(Sentinel())
                     except Exception:
                         pass
-                for t in producer_threads:
+                for t in runner_threads:
                     t.join(timeout=5)
 
             # join 후에도 살아있는 스레드가 있으면 경고
-            for t in producer_threads:
+            for t in runner_threads:
                 if t.is_alive():
-                    logger.warning("producer thread still alive after join timeout")
+                    logger.warning("runner thread still alive after join timeout")
 
         # ======================================================================
         # 7단계: 정리 — 결과 수집, stats 저장, 시그널 복원

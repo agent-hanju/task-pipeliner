@@ -21,25 +21,25 @@ from dummy_steps import (
     TerminalStep,
 )
 
-from task_pipeliner.producers import (
-    BaseProducer,
+from task_pipeliner.stats import StatsCollector
+from task_pipeliner.step_runners import (
+    BaseStepRunner,
     ChunkResult,
     ErrorSentinel,
-    InputProducer,
-    ParallelProducer,
+    InputStepRunner,
+    ParallelStepRunner,
     Sentinel,
-    SequentialProducer,
+    SequentialStepRunner,
     _parallel_worker,
     is_sentinel,
 )
-from task_pipeliner.stats import StatsCollector
 
 # ---------------------------------------------------------------------------
-# Concrete subclass for testing abstract BaseProducer
+# Concrete subclass for testing abstract BaseStepRunner
 # ---------------------------------------------------------------------------
 
 
-class _DummyProducer(BaseProducer):
+class _DummyProducer(BaseStepRunner):
     """Minimal concrete subclass — run() is a no-op."""
 
     def run(self) -> None:
@@ -85,16 +85,16 @@ class TestSentinel:
 
 
 # ---------------------------------------------------------------------------
-# InputProducer tests (W-R02)
+# InputStepRunner tests (W-R02)
 # ---------------------------------------------------------------------------
 
 
-class TestInputProducer:
-    """InputProducer: feeds items from a SOURCE step into output queues."""
+class TestInputStepRunner:
+    """InputStepRunner: feeds items from a SOURCE step into output queues."""
 
     @pytest.mark.timeout(10)
     def test_feeds_items_from_step(self) -> None:
-        """InputProducer should iterate step.items() and put into output queues."""
+        """InputStepRunner should iterate step.items() and put into output queues."""
         ctx = multiprocessing.get_context("spawn")
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
         stats = StatsCollector()
@@ -102,7 +102,7 @@ class TestInputProducer:
         step_name = "source"
         stats.register(step_name)
 
-        producer = InputProducer(
+        producer = InputStepRunner(
             step=step, step_name=step_name, output_queues={"main": [out_q]}, stats=stats
         )
         producer.run()
@@ -118,7 +118,7 @@ class TestInputProducer:
 
     @pytest.mark.timeout(10)
     def test_increments_processed_stat(self) -> None:
-        """InputProducer should increment 'processed' for each item."""
+        """InputStepRunner should increment 'processed' for each item."""
         ctx = multiprocessing.get_context("spawn")
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
         stats = StatsCollector()
@@ -126,7 +126,7 @@ class TestInputProducer:
         step_name = "source"
         stats.register(step_name)
 
-        producer = InputProducer(
+        producer = InputStepRunner(
             step=step, step_name=step_name, output_queues={"main": [out_q]}, stats=stats
         )
         producer.run()
@@ -136,7 +136,7 @@ class TestInputProducer:
 
     @pytest.mark.timeout(10)
     def test_calls_step_close(self) -> None:
-        """InputProducer should call step.close() after iteration."""
+        """InputStepRunner should call step.close() after iteration."""
         ctx = multiprocessing.get_context("spawn")
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
         stats = StatsCollector()
@@ -144,7 +144,7 @@ class TestInputProducer:
         step_name = "source"
         stats.register(step_name)
 
-        producer = InputProducer(
+        producer = InputStepRunner(
             step=step, step_name=step_name, output_queues={"main": [out_q]}, stats=stats
         )
         producer.run()
@@ -153,7 +153,7 @@ class TestInputProducer:
 
     @pytest.mark.timeout(10)
     def test_sends_sentinel_after_items(self) -> None:
-        """InputProducer should send Sentinel to all output queues after items."""
+        """InputStepRunner should send Sentinel to all output queues after items."""
         ctx = multiprocessing.get_context("spawn")
         out_q1: multiprocessing.Queue[Any] = ctx.Queue()
         out_q2: multiprocessing.Queue[Any] = ctx.Queue()
@@ -162,7 +162,7 @@ class TestInputProducer:
         step_name = "source"
         stats.register(step_name)
 
-        producer = InputProducer(
+        producer = InputStepRunner(
             step=step, step_name=step_name,
             output_queues={"a": [out_q1], "b": [out_q2]}, stats=stats,
         )
@@ -173,7 +173,7 @@ class TestInputProducer:
 
     @pytest.mark.timeout(10)
     def test_finishes_stats(self) -> None:
-        """InputProducer should call stats.finish() for the step."""
+        """InputStepRunner should call stats.finish() for the step."""
         ctx = multiprocessing.get_context("spawn")
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
         stats = StatsCollector()
@@ -181,7 +181,7 @@ class TestInputProducer:
         step_name = "source"
         stats.register(step_name)
 
-        producer = InputProducer(
+        producer = InputStepRunner(
             step=step, step_name=step_name, output_queues={"main": [out_q]}, stats=stats
         )
         producer.run()
@@ -190,11 +190,11 @@ class TestInputProducer:
 
 
 # ---------------------------------------------------------------------------
-# W-07: BaseProducer tests
+# W-07: BaseStepRunner tests
 # ---------------------------------------------------------------------------
 
 
-class TestBaseProducer:
+class TestBaseStepRunner:
     def _make_producer(self, **overrides: Any) -> _DummyProducer:
         """Helper to create a _DummyProducer with sensible defaults."""
         ctx = multiprocessing.get_context("spawn")
@@ -306,7 +306,7 @@ class TestParallelWorker:
 
     def _setup_worker(self, worker: Any, state: Any = None) -> None:
         """Set process-global worker instance/state for _parallel_worker."""
-        import task_pipeliner.producers as _mod
+        import task_pipeliner.step_runners as _mod
 
         _mod._worker_instance = worker
         _mod._worker_state = state
@@ -357,12 +357,12 @@ class TestParallelWorker:
 
 
 # ---------------------------------------------------------------------------
-# W-08: SequentialProducer tests
+# W-08: SequentialStepRunner tests
 # ---------------------------------------------------------------------------
 
 
-class TestSequentialProducer:
-    """SequentialProducer: single-process run(), direct call (no spawn)."""
+class TestSequentialStepRunner:
+    """SequentialStepRunner: single-process run(), direct call (no spawn)."""
 
     def _run_sequential(
         self,
@@ -372,7 +372,7 @@ class TestSequentialProducer:
         state: Any = None,
         step_name: str | None = None,
     ) -> tuple[list[Any], StatsCollector]:
-        """Helper: feed *items* into a SequentialProducer.run() and return
+        """Helper: feed *items* into a SequentialStepRunner.run() and return
         (output_items, stats).
         """
         ctx = multiprocessing.get_context("spawn")
@@ -386,7 +386,7 @@ class TestSequentialProducer:
             in_q.put(item)
         in_q.put(Sentinel())
 
-        producer = SequentialProducer(
+        producer = SequentialStepRunner(
             step=step,
             step_name=name,
             input_queue=in_q,
@@ -439,7 +439,7 @@ class TestSequentialProducer:
 
         in_q.put(Sentinel())
 
-        producer = SequentialProducer(
+        producer = SequentialStepRunner(
             step=SequentialPassthroughStep(),
             step_name=step_name,
             input_queue=in_q,
@@ -484,7 +484,7 @@ class TestSequentialProducer:
             in_q.put(-1)
         in_q.put(Sentinel())
 
-        producer = SequentialProducer(
+        producer = SequentialStepRunner(
             step=SequentialErrorOnItemStep(error_value=-1),
             step_name=step_name,
             input_queue=in_q,
@@ -508,12 +508,12 @@ class TestSequentialProducer:
 
 
 # ---------------------------------------------------------------------------
-# W-09: ParallelProducer tests
+# W-09: ParallelStepRunner tests
 # ---------------------------------------------------------------------------
 
 
-class TestParallelProducer:
-    """ParallelProducer: multi-process via ProcessPoolExecutor, direct run() call."""
+class TestParallelStepRunner:
+    """ParallelStepRunner: multi-process via ProcessPoolExecutor, direct run() call."""
 
     def _run_parallel(
         self,
@@ -525,7 +525,7 @@ class TestParallelProducer:
         state: Any = None,
         step_name: str | None = None,
     ) -> tuple[list[Any], StatsCollector]:
-        """Helper: feed *items* into a ParallelProducer.run() and return
+        """Helper: feed *items* into a ParallelStepRunner.run() and return
         (output_items, stats).
         """
         ctx = multiprocessing.get_context("spawn")
@@ -539,7 +539,7 @@ class TestParallelProducer:
             in_q.put(item)
         in_q.put(Sentinel())
 
-        producer = ParallelProducer(
+        producer = ParallelStepRunner(
             step=step,
             step_name=name,
             input_queue=in_q,
@@ -588,7 +588,7 @@ class TestParallelProducer:
 
         in_q.put(Sentinel())
 
-        producer = ParallelProducer(
+        producer = ParallelStepRunner(
             step=PassthroughStep(),
             step_name=step_name,
             input_queue=in_q,

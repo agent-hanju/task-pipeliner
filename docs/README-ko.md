@@ -339,7 +339,7 @@ class CleanerStep(SequentialStep):
         emit(cleaned, "kept")
 ```
 
-`is_ready()`가 `False`인 동안 아이템은 `CleanerStep` 큐에 대기. `CollectorStep.close()` 완료 후 Producer가 `get_output_state()`를 호출하여 반환된 state를 게이트된 스텝에 전달하면, 해당 스텝이 언블록되어 대기 중인 모든 아이템을 처리.
+`is_ready()`가 `False`인 동안 아이템은 `CleanerStep` 큐에 대기. `CollectorStep.close()` 완료 후 StepRunner가 `get_output_state()`를 호출하여 반환된 state를 게이트된 스텝에 전달하면, 해당 스텝이 언블록되어 대기 중인 모든 아이템을 처리.
 
 ### 안전한 종료
 

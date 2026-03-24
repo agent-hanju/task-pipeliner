@@ -140,7 +140,7 @@ class SlowStep(ParallelStep):
 
 
 class SequentialPassthroughStep(SequentialStep):
-    """Sequential step that emits item unchanged (for testing SequentialProducer)."""
+    """Sequential step that emits item unchanged (for testing SequentialStepRunner)."""
 
     outputs = ("main",)
 

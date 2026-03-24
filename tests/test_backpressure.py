@@ -9,13 +9,13 @@ from typing import Any
 import pytest
 from dummy_steps import SequentialPassthroughStep, SlowStep
 
-from task_pipeliner.producers import (
-    ParallelProducer,
+from task_pipeliner.stats import StatsCollector
+from task_pipeliner.step_runners import (
+    ParallelStepRunner,
     Sentinel,
-    SequentialProducer,
+    SequentialStepRunner,
     is_sentinel,
 )
-from task_pipeliner.stats import StatsCollector
 
 
 class TestBackpressure:
@@ -34,7 +34,7 @@ class TestBackpressure:
             in_q.put(i)
         in_q.put(Sentinel())
 
-        producer = SequentialProducer(
+        producer = SequentialStepRunner(
             step=SequentialPassthroughStep(),
             step_name="SequentialPassthroughStep",
             input_queue=in_q,
@@ -75,7 +75,7 @@ class TestBackpressure:
             in_q.put(i)
         in_q.put(Sentinel())
 
-        producer = SequentialProducer(
+        producer = SequentialStepRunner(
             step=SequentialPassthroughStep(),
             step_name="SequentialPassthroughStep",
             input_queue=in_q,
@@ -99,7 +99,7 @@ class TestBackpressure:
 
     @pytest.mark.timeout(30)
     def test_parallel_producer_slow_step_bounded_queue(self) -> None:
-        """ParallelProducer + SlowStep + bounded queue → all items processed."""
+        """ParallelStepRunner + SlowStep + bounded queue → all items processed."""
         ctx = multiprocessing.get_context("spawn")
         in_q: multiprocessing.Queue[Any] = ctx.Queue()
         out_q: multiprocessing.Queue[Any] = ctx.Queue(maxsize=5)
@@ -112,7 +112,7 @@ class TestBackpressure:
             in_q.put(i)
         in_q.put(Sentinel())
 
-        producer = ParallelProducer(
+        producer = ParallelStepRunner(
             step=SlowStep(sleep_seconds=0.01),
             step_name="SlowStep",
             input_queue=in_q,

@@ -7,7 +7,16 @@ from task_pipeliner.exceptions import (
     StepRegistrationError,
 )
 from task_pipeliner.pipeline import Pipeline
-from task_pipeliner.producers import InputProducer, ParallelProducer, SequentialProducer
+from task_pipeliner.step_runners import (
+    InputStepRunner,
+    ParallelStepRunner,
+    SequentialStepRunner,
+)
+
+# Backward-compatible aliases
+InputProducer = InputStepRunner
+ParallelProducer = ParallelStepRunner
+SequentialProducer = SequentialStepRunner
 
 __all__ = [
     "Pipeline",
@@ -15,6 +24,11 @@ __all__ = [
     "SequentialStep",
     "ParallelStep",
     "Worker",
+    # New names
+    "InputStepRunner",
+    "ParallelStepRunner",
+    "SequentialStepRunner",
+    # Legacy aliases
     "InputProducer",
     "ParallelProducer",
     "SequentialProducer",
