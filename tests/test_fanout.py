@@ -7,7 +7,7 @@ import threading
 from typing import Any
 
 import pytest
-from dummy_steps import PassthroughStep, StateAwareStep
+from dummy_steps import SequentialPassthroughStep, StateAwareStep
 
 from task_pipeliner.producers import Sentinel, SequentialProducer, is_sentinel
 from task_pipeliner.stats import StatsCollector
@@ -25,7 +25,7 @@ class TestFanOut:
         out_b: multiprocessing.Queue[Any] = ctx.Queue()
 
         stats = StatsCollector()
-        stats.register("PassthroughStep")
+        stats.register("SequentialPassthroughStep")
 
         items = list(range(20))
         for item in items:
@@ -33,11 +33,11 @@ class TestFanOut:
         in_q.put(Sentinel())
 
         producer = SequentialProducer(
-            step=PassthroughStep(),
+            step=SequentialPassthroughStep(),
+            step_name="SequentialPassthroughStep",
             input_queue=in_q,
             output_queues={"main": [out_a, out_b]},
             stats=stats,
-
         )
         producer.run()
 
@@ -70,7 +70,7 @@ class TestStateEvent:
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
 
         stats = StatsCollector()
-        stats.register("PassthroughStep")
+        stats.register("SequentialPassthroughStep")
 
         in_q.put(1)
         in_q.put(Sentinel())
@@ -79,11 +79,11 @@ class TestStateEvent:
         # Event NOT set — producer should block
 
         producer = SequentialProducer(
-            step=PassthroughStep(),
+            step=SequentialPassthroughStep(),
+            step_name="SequentialPassthroughStep",
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-
             ready_events=[evt],
         )
 
@@ -110,7 +110,7 @@ class TestStateEvent:
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
 
         stats = StatsCollector()
-        stats.register("PassthroughStep")
+        stats.register("SequentialPassthroughStep")
 
         in_q.put(42)
         in_q.put(Sentinel())
@@ -119,11 +119,11 @@ class TestStateEvent:
         evt_b = ctx.Event()
 
         producer = SequentialProducer(
-            step=PassthroughStep(),
+            step=SequentialPassthroughStep(),
+            step_name="SequentialPassthroughStep",
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-
             ready_events=[evt_a, evt_b],
         )
 
@@ -163,7 +163,7 @@ class TestFanOutEndToEnd:
         out_a: multiprocessing.Queue[Any] = ctx.Queue()
         out_b: multiprocessing.Queue[Any] = ctx.Queue()
         stats = StatsCollector()
-        stats.register("PassthroughStep")
+        stats.register("SequentialPassthroughStep")
         stats.register("StateAwareStep")
 
         evt = ctx.Event()
@@ -176,44 +176,41 @@ class TestFanOutEndToEnd:
 
         # Source: fan-out to queue_a and queue_b
         source_producer = SequentialProducer(
-            step=PassthroughStep(),
+            step=SequentialPassthroughStep(),
+            step_name="SequentialPassthroughStep",
             input_queue=source_q,
             output_queues={"main": [queue_a, queue_b]},
             stats=stats,
-
-
         )
 
         # Queue A: StateAwareStep, blocked until evt
         producer_a = SequentialProducer(
             step=StateAwareStep(),
+            step_name="StateAwareStep",
             input_queue=queue_a,
             output_queues={"main": [out_a]},
             stats=stats,
-
-
             state=state_a,
             ready_events=[evt],
         )
 
-        # Queue B: completes immediately, sets event on finish
-        def on_b_done(state: Any) -> None:
-            evt.set()
-
+        # Queue B: completes immediately, then sets event to unblock A
         producer_b = SequentialProducer(
-            step=PassthroughStep(),
+            step=SequentialPassthroughStep(),
+            step_name="SequentialPassthroughStep",
             input_queue=queue_b,
             output_queues={"main": [out_b]},
             stats=stats,
-
-
-            next_state_setter=on_b_done,
         )
+
+        def _run_b_then_signal() -> None:
+            producer_b.run()
+            evt.set()
 
         threads = [
             threading.Thread(target=source_producer.run),
             threading.Thread(target=producer_a.run),
-            threading.Thread(target=producer_b.run),
+            threading.Thread(target=_run_b_then_signal),
         ]
         for t in threads:
             t.start()

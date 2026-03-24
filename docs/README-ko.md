@@ -35,16 +35,12 @@ from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Any
 
-from task_pipeliner import BaseStep, StepType
+from task_pipeliner import ParallelStep, SequentialStep, SourceStep, Worker
 
 
-class LoaderStep(BaseStep):
+class LoaderStep(SourceStep):
     """SOURCE 스텝: 텍스트 파일에서 줄 단위로 읽기."""
     outputs = ("main",)
-
-    @property
-    def step_type(self) -> StepType:
-        return StepType.SOURCE
 
     def __init__(self, paths: list[str] | None = None, **_: Any) -> None:
         self._paths = [Path(p) for p in (paths or [])]
@@ -55,19 +51,11 @@ class LoaderStep(BaseStep):
                 for line in f:
                     yield {"text": line.strip()}
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
-        raise NotImplementedError
 
+class FilterWorker(Worker):
+    """FilterStep의 워커: 텍스트 길이로 필터링."""
 
-class FilterStep(BaseStep):
-    """PARALLEL 스텝: 텍스트 길이로 필터링."""
-    outputs = ("kept", "removed")
-
-    @property
-    def step_type(self) -> StepType:
-        return StepType.PARALLEL
-
-    def __init__(self, min_length: int = 10, **_: Any) -> None:
+    def __init__(self, min_length: int) -> None:
         self._min_length = min_length
 
     def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
@@ -77,13 +65,20 @@ class FilterStep(BaseStep):
             emit(item, "removed")
 
 
-class WriterStep(BaseStep):
+class FilterStep(ParallelStep):
+    """PARALLEL 스텝: 텍스트 길이로 필터링."""
+    outputs = ("kept", "removed")
+
+    def __init__(self, min_length: int = 10, **_: Any) -> None:
+        self._min_length = min_length
+
+    def create_worker(self) -> FilterWorker:
+        return FilterWorker(self._min_length)
+
+
+class WriterStep(SequentialStep):
     """SEQUENTIAL 터미널 스텝: 아이템을 JSONL 파일에 기록."""
     outputs = ()  # 터미널 — emit 호출 불가
-
-    @property
-    def step_type(self) -> StepType:
-        return StepType.SEQUENTIAL
 
     def __init__(self, output_path: str = "output.jsonl", **_: Any) -> None:
         self._path = Path(output_path)
@@ -148,29 +143,74 @@ task-pipeliner run --config pipeline_config.yaml --output ./output
 
 ## 핵심 개념
 
-### BaseStep
+### Step 계층 구조
 
-모든 파이프라인 스텝의 추상 기본 클래스.
+세 가지 추상 기본 클래스:
+
+| 클래스 | 설명 | 핵심 메서드 |
+|--------|------|------------|
+| `SourceStep` | 첫 번째 스텝 전용. 아이템 생산. | `items()` |
+| `ParallelStep` | CPU-bound 병렬 처리. | `create_worker() -> Worker` |
+| `SequentialStep` | 상태 기반 단일 스레드 처리. | `process(item, state, emit)` |
+
+**공통 인터페이스** (`StepBase`에서 상속):
 
 | 메서드/속성 | 필수 | 설명 |
 |------------|------|------|
-| `step_type` | 예 | `StepType.SOURCE`, `PARALLEL`, 또는 `SEQUENTIAL` |
-| `process(item, state, emit)` | 예 | 단일 아이템 처리. `emit(item, tag)`으로 출력 라우팅. |
 | `outputs` | ClassVar | 선언된 출력 태그 튜플. 빈 `()` = 터미널 스텝. |
-| `items()` | SOURCE만 | 입력 아이템을 yield하는 제너레이터. |
 | `initial_state` | 선택 | 상태 기반 처리를 위한 초기 state 객체 반환. |
 | `is_ready(state)` | 선택 | state가 준비될 때까지 처리를 게이팅 (기본: `True`). |
-| `set_step_state(target, state)` | 선택 | 다른 스텝에 state 전달 (`is_ready` 재평가 트리거). |
+| `get_output_state()` | 선택 | `close()` 후 `{target: state}` 딕셔너리를 반환하여 다른 스텝에 state 전달. |
 | `open()` | 선택 | 처리 시작 전 리소스 획득 (`is_ready` 이후 1회 호출). |
 | `close()` | 선택 | 처리 완료 후 리소스 해제. `open()`과 대칭. |
 
-**Step 생명주기:**
+### Worker
+
+`ParallelStep`용 별도의 picklable 클래스. Worker는 스폰된 프로세스에서 실행됩니다.
+
+```python
+class MyWorker(Worker):
+    def __init__(self, config_param: int) -> None:
+        self.config_param = config_param
+        self._model = None  # lazy init 불필요 — open() 사용
+
+    def open(self) -> None:
+        """워커 프로세스당 1회 호출."""
+        self._model = load_model()
+
+    def process(self, item: Any, state: Any, emit: Callable) -> None:
+        result = self._model.predict(item)
+        emit(result, "main")
+
+    def close(self) -> None:
+        """워커 프로세스 종료 시 1회 호출."""
+        del self._model
+
+class MyStep(ParallelStep):
+    outputs = ("main",)
+
+    def __init__(self, config_param: int = 42) -> None:
+        self.config_param = config_param
+
+    def create_worker(self) -> MyWorker:
+        return MyWorker(self.config_param)
+```
+
+**생명주기:**
 
 ```
-__init__(config) → is_ready() 게이팅 → open() → process() × N → close()
+메인 프로세스:                     워커 프로세스 N:
+──────────────                     ────────────────
+step = ParallelStep(**config)
+worker = step.create_worker()
+worker_bytes = pickle.dumps(worker)
+step.open()
+                                   worker = pickle.loads(worker_bytes)
+                                   worker.open()
+                                   worker.process(item, state, emit) × N
+                                   worker.close()
+step.close()
 ```
-
-> `open()`과 `close()`는 **메인 프로세스**에서만 실행됨. PARALLEL 스텝의 워커 프로세스는 pickle로 복원된 복사본을 받으며 `open()`을 호출하지 않음.
 
 ### Pipeline
 
@@ -182,14 +222,6 @@ pipeline.register("step_name", StepClass)     # 하나 등록
 pipeline.register_all({"name": Class, ...})    # 여러 개 등록
 pipeline.run(config=path_or_config, output_dir=path)
 ```
-
-### StepType
-
-| 타입 | 실행 방식 | 용도 |
-|------|----------|------|
-| `SOURCE` | 메인 스레드 | 첫 번째 스텝 전용. `items()`로 아이템 생산. |
-| `PARALLEL` | ProcessPoolExecutor (spawn 모드) | 무상태 아이템별 처리. CPU 바운드 작업. |
-| `SEQUENTIAL` | 단일 스레드 | 상태 기반 처리: 중복 제거, 집계, 파일 쓰기. |
 
 ## 설정
 
@@ -215,7 +247,7 @@ execution:
 
 ### 설정 규칙
 
-- 첫 번째 스텝은 반드시 `SOURCE`. 이후에는 `SOURCE` 불가.
+- 첫 번째 스텝은 반드시 `SourceStep`. 이후에는 `SourceStep` 불가.
 - 각 스텝의 `name`은 고유해야 함. 생략 시 `type` 값이 `name`으로 사용됨.
 - `outputs` 태그는 스텝 name을 참조해야 함 (type이 아님).
 - `outputs = ()` 스텝은 터미널 (`emit()` 호출 시 `RuntimeError`).
@@ -234,7 +266,7 @@ execution:
     category_b: processor_b
 ```
 
-**Fan-in** — 여러 스텝이 하나의 다운스트림 스텝에 입력. 프레임워크가 머저 스레드를 생성하여 큐를 합치고, 모든 업스트림이 완료되어야 센티넬을 전달:
+**Fan-in** — 여러 스텝이 하나의 다운스트림 스텝에 입력. 다운스트림은 공유 입력 큐를 사용하며, 모든 업스트림의 센티넬이 도착해야 종료:
 
 ```yaml
 - type: processor_a
@@ -275,30 +307,28 @@ pipeline:
     output_path: ./removed.jsonl
 ```
 
-`type`은 등록된 클래스를 선택하고, `name`(생략 시 `type`과 동일)은 `outputs` 라우팅, stats 추적, `set_step_state()` 대상 지정에 사용되는 고유 식별자입니다. `name` 없는 기존 설정은 그대로 동작합니다.
+`type`은 등록된 클래스를 선택하고, `name`(생략 시 `type`과 동일)은 `outputs` 라우팅, stats 추적, `get_output_state()` 대상 지정에 사용되는 고유 식별자입니다. `name` 없는 기존 설정은 그대로 동작합니다.
 
 ### State 게이팅
 
 2-pass 알고리즘용 (히스토그램 구축 → 히스토그램으로 정제):
 
 ```python
-class CollectorStep(BaseStep):
+class CollectorStep(SequentialStep):
     """Pass 1: 통계를 누적하면서 아이템을 전달."""
-    step_type = StepType.SEQUENTIAL
     outputs = ("main",)
 
     def process(self, item, state, emit):
         self._histogram.update(item)
         emit(item, "main")             # 즉시 전달
 
-    def close(self):
+    def get_output_state(self):
         # 모든 아이템 처리 후, 게이트된 스텝에 state 전달 (설정의 name 기준)
-        self.set_step_state("cleaner", self._histogram)
+        return {"cleaner": self._histogram}
 
 
-class CleanerStep(BaseStep):
+class CleanerStep(SequentialStep):
     """Pass 2: 수집된 통계를 사용하여 아이템 처리."""
-    step_type = StepType.SEQUENTIAL
     outputs = ("kept",)
 
     def is_ready(self, state):
@@ -309,7 +339,7 @@ class CleanerStep(BaseStep):
         emit(cleaned, "kept")
 ```
 
-`is_ready()`가 `False`인 동안 아이템은 `CleanerStep` 큐에 대기. `CollectorStep.close()`가 `set_step_state()`로 state를 전달하면, 게이트된 스텝이 언블록되어 대기 중인 모든 아이템을 처리.
+`is_ready()`가 `False`인 동안 아이템은 `CleanerStep` 큐에 대기. `CollectorStep.close()` 완료 후 Producer가 `get_output_state()`를 호출하여 반환된 state를 게이트된 스텝에 전달하면, 해당 스텝이 언블록되어 대기 중인 모든 아이템을 처리.
 
 ### 안전한 종료
 
@@ -317,7 +347,7 @@ class CleanerStep(BaseStep):
 
 ### 진행률 표시
 
-실행 중 stderr와 `progress.log`에 실시간 진행률 출력:
+실행 중 stderr에 실시간 진행률 출력, `progress.log`에는 최신 스냅샷만 저장 (매 갱신 시 덮어쓰기):
 
 ```
 --- Pipeline Progress (12.3s) -------------------------------------------
@@ -373,20 +403,20 @@ task-pipeliner batch jobs.json
 ### 단계별 가이드
 
 1. **Step 클래스를 모듈 레벨에 정의** (spawn 모드 pickle 필수):
-   - `SOURCE` 스텝: `items()`로 입력 데이터 생산.
-   - `PARALLEL` 스텝: 무상태 `process()` — CPU 바운드 작업.
-   - `SEQUENTIAL` 스텝: 상태 기반 `process()` — 중복 제거, 집계, I/O.
+   - `SourceStep`: `items()`로 입력 데이터 생산.
+   - `ParallelStep`: `create_worker()`로 `Worker` 반환. Worker에 `process()` 구현.
+   - `SequentialStep`: 상태 기반/순차 작업을 위한 `process()` 구현.
    - 터미널 스텝: `outputs = ()`로 설정, `emit()` 호출 금지.
 
 2. **`pipeline_config.yaml` 작성**: `type`, `outputs`, 스텝별 파라미터로 DAG 정의.
 
 3. **`run.py` 작성**: `Pipeline.register_all()`로 스텝 등록 후 `pipeline.run()` 호출.
 
-4. **실행 및 확인**: `output/stats.json`, `output/pipeline.log`, `output/progress.log` 확인.
+4. **실행 및 확인**: `output/stats.json`, `output/pipeline.log` (실행 로그), `output/progress.log` (최종 진행률 스냅샷) 확인.
 
 ### 제약 사항
 
-- **Pickle 규칙**: 모든 스텝 클래스는 모듈 레벨에 정의해야 함. 람다, 클로저, 중첩 클래스 불가. `functools.partial`로 모듈 레벨 함수 래핑은 허용.
+- **Pickle 규칙**: 모든 스텝 및 Worker 클래스는 모듈 레벨에 정의해야 함. 람다, 클로저, 중첩 클래스 불가. `functools.partial`로 모듈 레벨 함수 래핑은 허용.
 - **Spawn 모드**: 워커는 `multiprocessing.get_context("spawn")`을 사용 (Windows/Linux 호환). 엔진이 등록 시점에 pickle 가능 여부를 검증.
 - **에러 처리**: `process()` 내 예외는 캐치되어 WARNING으로 로깅되고, 해당 아이템은 스킵됨. stats의 `errored` 카운터가 증가.
 
@@ -394,12 +424,16 @@ task-pipeliner batch jobs.json
 
 | 클래스 | 모듈 | 설명 |
 |--------|------|------|
-| `Pipeline` | `task_pipeliner` | 스텝 등록, 파이프라인 실행 |
-| `BaseStep` | `task_pipeliner` | 모든 스텝의 추상 기본 클래스 |
-| `StepType` | `task_pipeliner` | Enum: `SOURCE`, `PARALLEL`, `SEQUENTIAL` |
-| `PipelineError` | `task_pipeliner` | 기본 예외 |
-| `StepRegistrationError` | `task_pipeliner` | 중복/pickle 불가 등록 |
-| `ConfigValidationError` | `task_pipeliner` | 잘못된 YAML 설정 |
+| `Pipeline` | `task_pipeliner.pipeline` | 스텝 등록, 파이프라인 실행 |
+| `StepRegistry` | `task_pipeliner.pipeline` | 스텝 이름 → 클래스 매핑 (pickle 검증 포함) |
+| `StepBase` | `task_pipeliner.base` | 모든 스텝 타입의 공통 인터페이스 (outputs, state, lifecycle) |
+| `SourceStep` | `task_pipeliner.base` | SOURCE 스텝 ABC (아이템 생산) |
+| `SequentialStep` | `task_pipeliner.base` | SEQUENTIAL 스텝 ABC (메인 스레드에서 처리) |
+| `ParallelStep` | `task_pipeliner.base` | PARALLEL 스텝 ABC (서브프로세스에 Worker 전달) |
+| `Worker` | `task_pipeliner.base` | 서브프로세스로 전달되는 워커 ABC |
+| `PipelineError` | `task_pipeliner.exceptions` | 기본 예외 |
+| `StepRegistrationError` | `task_pipeliner.exceptions` | 중복/pickle 불가 등록 |
+| `ConfigValidationError` | `task_pipeliner.exceptions` | 잘못된 YAML 설정 |
 | `PipelineConfig` | `task_pipeliner.config` | 파이프라인 설정 Pydantic 모델 |
 | `StepConfig` | `task_pipeliner.config` | 스텝 설정 Pydantic 모델 |
 | `ExecutionConfig` | `task_pipeliner.config` | 실행 설정 Pydantic 모델 |

@@ -9,7 +9,8 @@ from pathlib import Path
 from dummy_steps import DummySourceStep, FilterEvenStep, PassthroughStep, SlowStep
 
 from task_pipeliner.config import ExecutionConfig, PipelineConfig, StepConfig
-from task_pipeliner.engine import PipelineEngine, StepRegistry
+from task_pipeliner.engine import PipelineEngine
+from task_pipeliner.pipeline import StepRegistry
 from task_pipeliner.stats import StatsCollector
 
 

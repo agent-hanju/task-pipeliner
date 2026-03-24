@@ -16,11 +16,13 @@ class TestPublicAPI:
 
         assert Pipeline is not None
 
-    def test_base_classes_importable(self) -> None:
-        from task_pipeliner import BaseStep, StepType
+    def test_step_classes_importable(self) -> None:
+        from task_pipeliner import ParallelStep, SequentialStep, SourceStep, Worker
 
-        assert BaseStep is not None
-        assert StepType is not None
+        assert SourceStep is not None
+        assert SequentialStep is not None
+        assert ParallelStep is not None
+        assert Worker is not None
 
     def test_producers_importable(self) -> None:
         from task_pipeliner import InputProducer, ParallelProducer, SequentialProducer
@@ -44,8 +46,10 @@ class TestPublicAPI:
         """__all__ contains all expected public symbols."""
         expected = {
             "Pipeline",
-            "BaseStep",
-            "StepType",
+            "SourceStep",
+            "SequentialStep",
+            "ParallelStep",
+            "Worker",
             "InputProducer",
             "ParallelProducer",
             "SequentialProducer",

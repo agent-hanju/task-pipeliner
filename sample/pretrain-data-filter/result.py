@@ -8,13 +8,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Self
 
-from task_pipeliner.base import BaseResult
-
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class FilterResult(BaseResult):
+class FilterResult:
     """Pipeline result aggregation.
 
     Fields: kept, removed, removed_reasons (dict[str, int]).

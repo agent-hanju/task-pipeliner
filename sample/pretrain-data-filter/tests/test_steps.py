@@ -35,46 +35,43 @@ class TestQualityFilterStep:
     def test_normal_item_kept(self) -> None:
         from steps import QualityFilterStep
 
-        step = QualityFilterStep()
+        worker = QualityFilterStep().create_worker()
         collector = _Collector()
         item = copy.deepcopy(SAMPLE_NORMAL_ITEM)
-        result = step.process(item, None, collector)
+        worker.process(item, None, collector)
         assert len(collector.items) == 1
         assert collector.items[0][1] == "kept"
-        assert result.kept == 1
 
     def test_short_text_removed(self) -> None:
         from steps import QualityFilterStep
 
-        step = QualityFilterStep()
+        worker = QualityFilterStep().create_worker()
         collector = _Collector()
         item = copy.deepcopy(SAMPLE_SHORT_ITEM)
-        result = step.process(item, None, collector)
+        worker.process(item, None, collector)
         assert len(collector.items) == 1
         assert collector.items[0][1] == "removed"
-        assert result.removed == 1
-        assert "length" in list(result.removed_reasons.keys())[0]
+        assert "length" in collector.items[0][0].get("_removed_reason", "")
 
     def test_pii_removed(self) -> None:
         from steps import QualityFilterStep
 
-        step = QualityFilterStep()
+        worker = QualityFilterStep().create_worker()
         collector = _Collector()
         item = copy.deepcopy(SAMPLE_PII_ITEM)
-        result = step.process(item, None, collector)
+        worker.process(item, None, collector)
         assert len(collector.items) == 1
         assert collector.items[0][1] == "removed"
-        assert result.removed == 1
-        assert "pii" in list(result.removed_reasons.keys())[0]
+        assert "pii" in collector.items[0][0].get("_removed_reason", "")
 
     def test_filter_disabled(self) -> None:
         """Disabled filter should be skipped."""
         from steps import QualityFilterStep
 
-        step = QualityFilterStep(filters={"length": {}, "pii": {}})
+        worker = QualityFilterStep(filters={"length": {}, "pii": {}}).create_worker()
         collector = _Collector()
         item = copy.deepcopy(SAMPLE_SHORT_ITEM)
-        step.process(item, None, collector)
+        worker.process(item, None, collector)
         # length filter still active, should remove
         assert collector.items[0][1] == "removed"
 
@@ -88,10 +85,10 @@ class TestHashComputeStep:
     def test_adds_hash_field(self) -> None:
         from steps import HashComputeStep
 
-        step = HashComputeStep()
+        worker = HashComputeStep().create_worker()
         collector = _Collector()
         item = copy.deepcopy(SAMPLE_NORMAL_ITEM)
-        step.process(item, None, collector)
+        worker.process(item, None, collector)
         assert len(collector.items) == 1
         emitted, tag = collector.items[0]
         assert tag == "main"
@@ -100,29 +97,29 @@ class TestHashComputeStep:
     def test_same_text_same_hash(self) -> None:
         from steps import HashComputeStep
 
-        step = HashComputeStep()
+        worker = HashComputeStep().create_worker()
         c1, c2 = _Collector(), _Collector()
-        step.process(copy.deepcopy(SAMPLE_DUPLICATE_ITEMS[0]), None, c1)
-        step.process(copy.deepcopy(SAMPLE_DUPLICATE_ITEMS[1]), None, c2)
+        worker.process(copy.deepcopy(SAMPLE_DUPLICATE_ITEMS[0]), None, c1)
+        worker.process(copy.deepcopy(SAMPLE_DUPLICATE_ITEMS[1]), None, c2)
         assert c1.items[0][0]["_dedup_hash"] == c2.items[0][0]["_dedup_hash"]
 
     def test_normalization_produces_same_hash(self) -> None:
         """Different casing/whitespace → same hash after normalization."""
         from steps import HashComputeStep
 
-        step = HashComputeStep()
+        worker = HashComputeStep().create_worker()
         c1, c2 = _Collector(), _Collector()
-        step.process({"id": "a", "text": "Hello  World"}, None, c1)
-        step.process({"id": "b", "text": "hello world"}, None, c2)
+        worker.process({"id": "a", "text": "Hello  World"}, None, c1)
+        worker.process({"id": "b", "text": "hello world"}, None, c2)
         assert c1.items[0][0]["_dedup_hash"] == c2.items[0][0]["_dedup_hash"]
 
     def test_different_text_different_hash(self) -> None:
         from steps import HashComputeStep
 
-        step = HashComputeStep()
+        worker = HashComputeStep().create_worker()
         c1, c2 = _Collector(), _Collector()
-        step.process({"id": "a", "text": "hello"}, None, c1)
-        step.process({"id": "b", "text": "world"}, None, c2)
+        worker.process({"id": "a", "text": "hello"}, None, c1)
+        worker.process({"id": "b", "text": "world"}, None, c2)
         assert c1.items[0][0]["_dedup_hash"] != c2.items[0][0]["_dedup_hash"]
 
 
@@ -141,12 +138,10 @@ class TestHashLookupStep:
         c1, c2 = _Collector(), _Collector()
         item1 = {"id": "a", "text": "hello", "_dedup_hash": "abc123"}
         item2 = {"id": "b", "text": "world", "_dedup_hash": "abc123"}
-        r1 = step.process(item1, state, c1)
-        r2 = step.process(item2, state, c2)
+        step.process(item1, state, c1)
+        step.process(item2, state, c2)
         assert c1.items[0][1] == "kept"
-        assert r1.kept == 1
         assert c2.items[0][1] == "removed"
-        assert r2.removed == 1
 
     @pytest.mark.timeout(15)
     def test_different_hash_all_kept(self) -> None:
@@ -188,10 +183,10 @@ class TestMinHashComputeStep:
     def test_adds_minhash_field(self) -> None:
         from steps import MinHashComputeStep
 
-        step = MinHashComputeStep()
+        worker = MinHashComputeStep().create_worker()
         collector = _Collector()
         item = copy.deepcopy(SAMPLE_NORMAL_ITEM)
-        step.process(item, None, collector)
+        worker.process(item, None, collector)
         assert len(collector.items) == 1
         assert "_minhash" in collector.items[0][0]
         assert collector.items[0][1] == "main"
@@ -199,10 +194,10 @@ class TestMinHashComputeStep:
     def test_same_text_same_signature(self) -> None:
         from steps import MinHashComputeStep
 
-        step = MinHashComputeStep()
+        worker = MinHashComputeStep().create_worker()
         c1, c2 = _Collector(), _Collector()
-        step.process(copy.deepcopy(SAMPLE_DUPLICATE_ITEMS[0]), None, c1)
-        step.process(copy.deepcopy(SAMPLE_DUPLICATE_ITEMS[1]), None, c2)
+        worker.process(copy.deepcopy(SAMPLE_DUPLICATE_ITEMS[0]), None, c1)
+        worker.process(copy.deepcopy(SAMPLE_DUPLICATE_ITEMS[1]), None, c2)
         mh1 = c1.items[0][0]["_minhash"]
         mh2 = c2.items[0][0]["_minhash"]
         assert mh1.jaccard(mh2) == 1.0
@@ -210,12 +205,12 @@ class TestMinHashComputeStep:
     def test_similar_text_high_jaccard(self) -> None:
         from steps import MinHashComputeStep
 
-        step = MinHashComputeStep()
+        worker = MinHashComputeStep().create_worker()
         c1, c2 = _Collector(), _Collector()
         text1 = " ".join([f"word{i}" for i in range(100)])
         text2 = " ".join([f"word{i}" for i in range(100)] + ["extra"])
-        step.process({"id": "a", "text": text1}, None, c1)
-        step.process({"id": "b", "text": text2}, None, c2)
+        worker.process({"id": "a", "text": text1}, None, c1)
+        worker.process({"id": "b", "text": text2}, None, c2)
         mh1 = c1.items[0][0]["_minhash"]
         mh2 = c2.items[0][0]["_minhash"]
         assert mh1.jaccard(mh2) > 0.5
@@ -224,9 +219,9 @@ class TestMinHashComputeStep:
         """Text with fewer words than ngram_size should still work."""
         from steps import MinHashComputeStep
 
-        step = MinHashComputeStep(ngram_size=5)
+        worker = MinHashComputeStep(ngram_size=5).create_worker()
         collector = _Collector()
-        step.process({"id": "a", "text": "짧은 글"}, None, collector)
+        worker.process({"id": "a", "text": "짧은 글"}, None, collector)
         assert len(collector.items) == 1
         assert "_minhash" in collector.items[0][0]
 
@@ -249,12 +244,10 @@ class TestMinHashLookupStep:
         c1, c2 = _Collector(), _Collector()
         item1 = {"id": "a", "text": "x", "_minhash": mh}
         item2 = {"id": "b", "text": "y", "_minhash": mh}
-        r1 = step.process(item1, None, c1)
-        r2 = step.process(item2, None, c2)
+        step.process(item1, None, c1)
+        step.process(item2, None, c2)
         assert c1.items[0][1] == "kept"
-        assert r1.kept == 1
         assert c2.items[0][1] == "removed"
-        assert r2.removed == 1
 
     @pytest.mark.timeout(15)
     def test_different_minhash_all_kept(self) -> None:

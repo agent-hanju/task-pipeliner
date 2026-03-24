@@ -1,18 +1,17 @@
-"""Execution engine: StepRegistry, DAG queue wiring, producer lifecycle."""
+"""Execution engine: DAG queue wiring, producer lifecycle."""
 
 from __future__ import annotations
 
 import logging
 import multiprocessing
-import pickle
 import signal
 import threading
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from task_pipeliner.base import BaseStep, StepType
+from task_pipeliner.base import ParallelStep, SourceStep, StepBase
 from task_pipeliner.config import PipelineConfig
-from task_pipeliner.exceptions import ConfigValidationError, StepRegistrationError
+from task_pipeliner.exceptions import ConfigValidationError
 from task_pipeliner.producers import (
     InputProducer,
     ParallelProducer,
@@ -22,103 +21,10 @@ from task_pipeliner.producers import (
 from task_pipeliner.progress import ProgressReporter
 from task_pipeliner.stats import StatsCollector
 
+if TYPE_CHECKING:
+    from task_pipeliner.pipeline import StepRegistry
+
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# StepRegistry — Step 클래스 등록소
-# ---------------------------------------------------------------------------
-
-
-class StepRegistry:
-    """Step 이름 → Step 클래스 매핑을 관리한다.
-
-    등록 시 pickle 가능 여부를 검증하여,
-    spawn 모드 멀티프로세싱에서 문제가 될 클래스를 조기에 차단한다.
-    """
-
-    def __init__(self) -> None:
-        logger.debug("initialising StepRegistry")
-        self._registry: dict[str, type] = {}
-
-    def register(self, name: str, cls: type) -> None:
-        """Step 클래스를 name으로 등록한다.
-
-        - 이미 같은 이름이 등록되어 있으면 StepRegistrationError
-        - pickle 불가능한 클래스면 StepRegistrationError
-        """
-        logger.debug("name=%s cls=%s", name, cls.__name__)
-        # 중복 등록 방지
-        if name in self._registry:
-            raise StepRegistrationError(
-                f"Step '{name}' is already registered",
-                step_name=name,
-            )
-        # spawn 모드에서 워커 프로세스로 전달하려면 pickle 가능해야 함
-        try:
-            pickle.dumps(cls)
-        except Exception as exc:
-            raise StepRegistrationError(
-                f"Step '{name}' class {cls.__name__} is not picklable: {exc}",
-                step_name=name,
-            ) from exc
-        self._registry[name] = cls
-        logger.debug("registered step '%s'", name)
-
-    def get(self, name: str) -> type:
-        """name에 해당하는 Step 클래스를 반환한다.
-
-        미등록 시 StepRegistrationError (등록된 이름 목록 포함).
-        """
-        if name not in self._registry:
-            available = sorted(self._registry.keys())
-            raise StepRegistrationError(
-                f"Step '{name}' is not registered. "
-                f"Available: {', '.join(available) if available else '(none)'}",
-                step_name=name,
-            )
-        return self._registry[name]
-
-
-# ---------------------------------------------------------------------------
-# Fan-in 큐 머저 — 여러 입력 큐를 하나의 큐로 합친다
-# ---------------------------------------------------------------------------
-
-
-def _start_queue_merger(
-    input_queues: list[multiprocessing.Queue[Any]],
-    merged_queue: multiprocessing.Queue[Any],
-) -> list[threading.Thread]:
-    """input_queues 각각에 feeder 스레드를 붙여서 merged_queue로 합친다.
-
-    모든 입력 큐에서 Sentinel이 도착해야 merged_queue에도 Sentinel을 넣는다.
-    (하나라도 아직 보내고 있으면 merged_queue는 열려 있음)
-    """
-    n = len(input_queues)
-    lock = threading.Lock()
-    remaining = [n]  # 아직 Sentinel을 안 보낸 큐 수 (리스트로 감싸서 클로저에서 수정 가능하게)
-
-    def _feed(q: multiprocessing.Queue[Any]) -> None:
-        while True:
-            item = q.get()
-            if isinstance(item, Sentinel):
-                # 이 큐는 끝남 → 남은 카운트 감소
-                with lock:
-                    remaining[0] -= 1
-                    # 마지막 큐까지 다 끝나면 merged_queue에도 Sentinel
-                    if remaining[0] == 0:
-                        merged_queue.put(Sentinel())
-                return
-            # 일반 아이템은 그대로 전달
-            merged_queue.put(item)
-
-    threads: list[threading.Thread] = []
-    for q in input_queues:
-        t = threading.Thread(target=_feed, args=(q,), daemon=True)
-        t.start()
-        threads.append(t)
-    logger.debug("started %d merger threads for fan-in", n)
-    return threads
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +45,7 @@ class PipelineEngine:
         logger.debug(
             "config steps=%d registry=%d",
             len(config.pipeline),
-            len(registry._registry),
+            len(registry),
         )
         self.config = config
         self.registry = registry
@@ -153,13 +59,11 @@ class PipelineEngine:
         """파이프라인을 구성하고 실행한다.
 
         큰 흐름:
-        1) Step 인스턴스 생성 + SOURCE 검증
-        2) DAG 큐 토폴로지 구성 (outputs 설정 기반)
-        3) fan-in 머지 (여러 큐 → 하나)
-        4) Producer 생성 (Sequential / Parallel)
-        5) state dispatch 콜백 주입
-        6) 스레드 시작 → join 대기
-        7) 결과 수집 + stats 저장
+        1) Step 인스턴스 생성 + SourceStep 검증
+        2) DAG 큐 토폴로지 구성 (공유 입력 큐 + sentinel_count)
+        3) Producer 생성 (Sequential / Parallel) + state dispatch
+        4) 스레드 시작 → join 대기
+        5) 결과 수집 + stats 저장
         """
         logger.info(
             "pipeline started steps=%d workers=%d",
@@ -181,36 +85,35 @@ class PipelineEngine:
 
         # config의 type 이름으로 registry에서 클래스를 찾아 인스턴스화
         # StepConfig의 extra 필드들이 Step.__init__의 kwargs로 전달됨
-        # name 필드가 인스턴스 고유 키 (생략 시 type과 동일)
-        instance_by_name: dict[str, BaseStep] = {}
+        # step_cfg.name이 인스턴스 고유 키 (생략 시 type과 동일)
+        instance_by_name: dict[str, StepBase] = {}
         for step_cfg in enabled_cfgs:
             cls = self.registry.get(step_cfg.type)
             extra = step_cfg.model_extra or {}
             step = cls(**extra)
-            step.name = step_cfg.name
             instance_by_name[step_cfg.name] = step
 
         # 첫 번째 step은 반드시 SOURCE여야 함
         source_name = enabled_cfgs[0].name
         source_step = instance_by_name[source_name]
 
-        if source_step.step_type != StepType.SOURCE:
+        if not isinstance(source_step, SourceStep):
             raise ConfigValidationError(
-                "Pipeline must have a SOURCE step as the first step",
+                "Pipeline must have a SourceStep as the first step",
                 field="pipeline",
             )
-        # 두 번째 이후에 SOURCE가 있으면 에러
+        # 두 번째 이후에 SourceStep이 있으면 에러
         for step_cfg in enabled_cfgs[1:]:
             step = instance_by_name[step_cfg.name]
-            if step.step_type == StepType.SOURCE:
+            if isinstance(step, SourceStep):
                 raise ConfigValidationError(
-                    "SOURCE step must be the first step in the pipeline",
+                    "SourceStep must be the first step in the pipeline",
                     field="pipeline",
                 )
 
         # 통계 수집기에 모든 step 등록
-        for step in instance_by_name.values():
-            self.stats.register(step.name)
+        for name in instance_by_name:
+            self.stats.register(name)
 
         # ======================================================================
         # 2단계: DAG 큐 토폴로지 구성
@@ -219,24 +122,40 @@ class PipelineEngine:
         # YAML config의 outputs 설정을 기반으로 step 간 큐를 생성한다.
         #
         # 예: StepA.outputs = {"kept": "StepB", "removed": "StepC"}
-        #   → StepA의 "kept" 태그 큐 → StepB의 입력 큐
-        #   → StepA의 "removed" 태그 큐 → StepC의 입력 큐
+        #   → StepA의 "kept" 태그 출력 → StepB의 입력 큐
+        #   → StepA의 "removed" 태그 출력 → StepC의 입력 큐
+        #
+        # Fan-in 처리: 여러 upstream이 같은 target을 가리키면 하나의 공유 큐에 put.
+        # downstream Producer는 sentinel_count만큼 Sentinel을 받아야 종료한다.
         #
         # output_queues_map[step_name][tag] = [큐들]  (한 태그가 여러 step으로 fan-out 가능)
-        # input_queues_map[step_name] = [이 step으로 들어오는 큐들]  (여러 step에서 fan-in 가능)
+
+        # SOURCE를 제외한 나머지 step들 (처리 대상)
+        processing_names = [cfg.name for cfg in enabled_cfgs if cfg.name != source_name]
 
         output_queues_map: dict[str, dict[str, list[multiprocessing.Queue[Any]]]] = {
             n: {} for n in instance_by_name
         }
-        input_queues_map: dict[str, list[multiprocessing.Queue[Any]]] = {
-            n: [] for n in instance_by_name if n != source_name
-        }
-        # 비상 종료 시 sentinel 주입을 위해 모든 큐를 추적
+
+        # 각 처리 step에 하나의 공유 입력 큐를 생성
+        input_queue_for: dict[str, multiprocessing.Queue[Any]] = {}
         all_queues: list[multiprocessing.Queue[Any]] = []
+        for step_name in processing_names:
+            q: multiprocessing.Queue[Any] = ctx.Queue()
+            # 프로듀서 스레드 종료 시 Queue 내부 feeder thread의
+            # pipe flush를 기다리지 않도록 설정.
+            q.cancel_join_thread()
+            input_queue_for[step_name] = q
+            all_queues.append(q)
+
+        # 각 target에 도착할 sentinel 개수 (= 고유 upstream step 수)
+        sentinel_count_for: dict[str, int] = {n: 0 for n in processing_names}
 
         for step_cfg in enabled_cfgs:
             if step_cfg.outputs is None:
                 continue
+            # 이 step에서 연결되는 target을 추적 (sentinel 카운팅용)
+            targets_from_this_step: set[str] = set()
             for tag, targets in step_cfg.outputs.items():
                 # targets는 "StepB" (str) 또는 ["StepB", "StepC"] (list) 형태
                 target_list = [targets] if isinstance(targets, str) else targets
@@ -248,50 +167,17 @@ class PipelineEngine:
                             target_name,
                         )
                         continue
-                    # 각 연결(edge)마다 독립적인 큐를 생성
-                    q: multiprocessing.Queue[Any] = ctx.Queue()
-                    # 프로듀서 스레드 종료 시 Queue 내부 feeder thread의
-                    # pipe flush를 기다리지 않도록 설정.
-                    # 다운스트림 프로듀서가 큐를 소비하므로 데이터 손실 없음.
-                    q.cancel_join_thread()
+                    q = input_queue_for[target_name]
                     output_queues_map[step_cfg.name].setdefault(tag, []).append(q)
-                    input_queues_map[target_name].append(q)
-                    all_queues.append(q)
+                    targets_from_this_step.add(target_name)
+            for target_name in targets_from_this_step:
+                sentinel_count_for[target_name] += 1
 
-        # ======================================================================
-        # 3단계: Fan-in 머지 — 여러 입력 큐를 하나로 합치기
-        # ======================================================================
-        #
-        # 한 step에 여러 upstream이 있으면 (fan-in), 머저 스레드가
-        # 여러 큐를 하나의 merged_queue로 합쳐준다.
-        #
-        # 입력 큐가 0개: upstream이 없음 → 즉시 sentinel을 넣어서 바로 종료되게 함
-        # 입력 큐가 1개: 그대로 사용
-        # 입력 큐가 2+개: 머저 스레드로 합침
-
-        merged_input: dict[str, multiprocessing.Queue[Any]] = {}
-        merger_threads: list[threading.Thread] = []
-        # SOURCE를 제외한 나머지 step들 (처리 대상)
-        processing_names = [cfg.name for cfg in enabled_cfgs if cfg.name != source_name]
-
+        # upstream이 없는 step → sentinel을 넣어서 즉시 종료되게 함
         for step_name in processing_names:
-            in_queues = input_queues_map.get(step_name, [])
-            if len(in_queues) == 0:
-                # upstream 없음 → 빈 큐에 sentinel을 넣어서 즉시 종료
-                q = ctx.Queue()
-                q.put(Sentinel())
-                merged_input[step_name] = q
-                all_queues.append(q)
-            elif len(in_queues) == 1:
-                # 1:1 연결 → 큐를 그대로 사용
-                merged_input[step_name] = in_queues[0]
-            else:
-                # fan-in → 머저 스레드로 합침
-                merged_q: multiprocessing.Queue[Any] = ctx.Queue()
-                threads = _start_queue_merger(in_queues, merged_q)
-                merger_threads.extend(threads)
-                merged_input[step_name] = merged_q
-                all_queues.append(merged_q)
+            if sentinel_count_for[step_name] == 0:
+                input_queue_for[step_name].put(Sentinel())
+                sentinel_count_for[step_name] = 1
 
         # ======================================================================
         # 4단계: Producer 생성
@@ -300,93 +186,82 @@ class PipelineEngine:
         # SOURCE step 전용 InputProducer — items()를 호출해서 출력 큐에 넣는다
         input_producer = InputProducer(
             step=source_step,
+            step_name=source_name,
             output_queues=output_queues_map[source_name],
             stats=self.stats,
         )
 
         # 나머지 step들의 Producer 생성
+        #
+        # state_dispatch 콜백: Producer가 step.close() 후 get_output_state()를
+        # 호출하고, 반환된 {target_name: state} 매핑을 이 콜백으로 dispatch한다.
+        # producer_by_name / state_events를 클로저로 캡처하므로,
+        # Producer 생성 후에도 새로 추가된 Producer를 참조할 수 있다.
         producers: list[SequentialProducer | ParallelProducer] = []
         producer_by_name: dict[str, SequentialProducer | ParallelProducer] = {}
-        state_events: dict[str, threading.Event] = {}  # state 변경 시 깨우기 위한 이벤트
+        state_events: dict[str, threading.Event] = {}
+
+        def _state_dispatch(target_name: str, state: Any) -> None:
+            target = producer_by_name.get(target_name)
+            if target is None:
+                raise ValueError(
+                    f"state dispatch target '{target_name}' not found. "
+                    f"Available: {sorted(producer_by_name.keys())}"
+                )
+            target.state = state
+            target_evt = state_events.get(target_name)
+            if target_evt is not None:
+                target_evt.set()
+            logger.info("state dispatched to %s", target_name)
 
         for step_name in processing_names:
             step = instance_by_name[step_name]
-            in_q = merged_input[step_name]
+            in_q = input_queue_for[step_name]
             out_qs = output_queues_map[step_name]
             evt = threading.Event()
-            state_events[step.name] = evt
+            state_events[step_name] = evt
 
-            # PARALLEL step → ProcessPoolExecutor 기반 ParallelProducer
-            # SEQUENTIAL step → 단일 스레드 SequentialProducer
+            # ParallelStep → ProcessPoolExecutor 기반 ParallelProducer
+            # SequentialStep → 단일 스레드 SequentialProducer
             p: SequentialProducer | ParallelProducer
-            if step.step_type == StepType.PARALLEL:
+            sc = sentinel_count_for[step_name]
+            if isinstance(step, ParallelStep):
                 p = ParallelProducer(
                     step=step,
+                    step_name=step_name,
                     input_queue=in_q,
                     output_queues=out_qs,
                     stats=self.stats,
                     state=step.initial_state,
+                    sentinel_count=sc,
                     workers=self.config.execution.workers,
                     chunk_size=self.config.execution.chunk_size,
                     state_changed_event=evt,
+                    state_dispatch=_state_dispatch,
                 )
             else:
                 p = SequentialProducer(
                     step=step,
+                    step_name=step_name,
                     input_queue=in_q,
                     output_queues=out_qs,
                     stats=self.stats,
                     state=step.initial_state,
+                    sentinel_count=sc,
                     state_changed_event=evt,
+                    state_dispatch=_state_dispatch,
                 )
             producers.append(p)
-            producer_by_name[step.name] = p
-
-        # ======================================================================
-        # 5단계: State dispatch 콜백 주입
-        # ======================================================================
-        #
-        # step.set_step_state("TargetStep", value) 호출 시:
-        #   1) producer_by_name에서 대상 Producer를 찾아서 state를 교체
-        #   2) state_events를 set()해서 is_ready() 재평가를 트리거
-        #
-        # 이 콜백은 메인 프로세스에서만 동작한다 (pickle 불가 → 워커에선 None)
-
-        def _make_state_dispatch(
-            pmap: dict[str, SequentialProducer | ParallelProducer],
-            emap: dict[str, threading.Event],
-        ) -> Any:
-            def dispatch(target_name: str, state: Any) -> None:
-                target = pmap.get(target_name)
-                if target is None:
-                    raise ValueError(
-                        f"set_step_state target '{target_name}' not found. "
-                        f"Available: {sorted(pmap.keys())}"
-                    )
-                # Producer의 state를 교체
-                target.state = state
-                # 대상 step의 is_ready() 재평가를 위해 이벤트 시그널
-                target_evt = emap.get(target_name)
-                if target_evt is not None:
-                    target_evt.set()
-                logger.info(
-                    "state dispatched to %s", target_name,
-                )
-            return dispatch
-
-        state_dispatch = _make_state_dispatch(producer_by_name, state_events)
-        # 모든 step에 콜백 주입 (워커로 pickle될 때는 __getstate__에서 제외됨)
-        for step in instance_by_name.values():
-            step._state_dispatch = state_dispatch
+            producer_by_name[step_name] = p
 
         logger.debug("built %d producers", len(producers))
 
         # ======================================================================
-        # 6단계: 스레드 시작 + 실행 대기
+        # 5단계: 스레드 시작 + 실행 대기
         # ======================================================================
 
         # 진행률 표시에 사용할 step 이름 목록
-        step_names = [instance_by_name[cfg.name].name for cfg in enabled_cfgs]
+        step_names = [cfg.name for cfg in enabled_cfgs]
         # InputProducer는 별도 스레드에서 실행
         feeder = threading.Thread(target=input_producer.run, daemon=True)
         # 각 Producer도 별도 스레드에서 실행
@@ -436,8 +311,6 @@ class PipelineEngine:
             # 시그널 종료: 5초 타임아웃 후 강제 sentinel 주입
             join_timeout = 5 if shutdown_event.is_set() else None
             feeder.join(timeout=join_timeout)
-            for t in merger_threads:
-                t.join(timeout=join_timeout)
             for t in producer_threads:
                 t.join(timeout=join_timeout)
 

@@ -4,63 +4,22 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
-from enum import Enum
 from typing import Any, ClassVar
 
-
-class StepType(Enum):
-    PARALLEL = "parallel"
-    SEQUENTIAL = "sequential"
-    SOURCE = "source"
+# ---------------------------------------------------------------------------
+# StepBase — shared infrastructure (private)
+# ---------------------------------------------------------------------------
 
 
-class BaseStep(ABC):
-    """Abstract base for individual-item processing steps."""
+class StepBase:
+    """Common infrastructure for all step types.
+
+    Not intended for direct subclassing — use ``SourceStep``,
+    ``SequentialStep``, or ``ParallelStep`` instead.
+    """
 
     outputs: ClassVar[tuple[str, ...]] = ()
     """Declared output tags. Empty tuple ``()`` means terminal step (emit not allowed)."""
-
-    _state_dispatch: Callable[[str, Any], None] | None = None
-    _name: str | None = None
-
-    def __getstate__(self) -> dict[str, Any]:
-        state = self.__dict__.copy()
-        state.pop("_state_dispatch", None)
-        return state
-
-    def __setstate__(self, state: dict[str, Any]) -> None:
-        self.__dict__.update(state)
-        self._state_dispatch = None
-
-    @property
-    def name(self) -> str:
-        """Instance name. Defaults to class name; overridden by engine from config."""
-        return self._name or type(self).__name__
-
-    @name.setter
-    def name(self, value: str) -> None:
-        self._name = value
-
-    @property
-    @abstractmethod
-    def step_type(self) -> StepType: ...
-
-    @abstractmethod
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
-        """Process a single item.
-
-        *emit(item, tag)* — callback provided by the Producer to forward
-        items to the named output.  Call it zero or more times.
-
-        Example::
-
-            emit(item, "kept")     # forward to "kept" output
-            emit(item, "removed")  # forward to "removed" output
-
-        ``outputs = ()`` steps (terminal) must NOT call emit —
-        doing so raises ``RuntimeError``.
-        """
-        ...
 
     @property
     def initial_state(self) -> Any:
@@ -68,14 +27,10 @@ class BaseStep(ABC):
 
         Override in subclasses that need mutable state passed to process().
         The returned object is passed as the ``state`` argument to every
-        ``process()`` call. For SEQUENTIAL steps, it is the same object
+        ``process()`` call.  For SEQUENTIAL steps, it is the same object
         across all calls (accumulated in-place).
         """
         return None
-
-    def items(self) -> Generator[Any, None, None]:
-        """SOURCE 스텝 전용. 아이템을 yield한다."""
-        raise NotImplementedError("items() must be implemented by SOURCE steps")
 
     def is_ready(self, state: Any) -> bool:
         """Return True if this step is ready to process items.
@@ -87,19 +42,18 @@ class BaseStep(ABC):
         """
         return True
 
-    def set_step_state(self, target: str, state: Any) -> None:
-        """Set another step's state and fire a state-change event.
+    def get_output_state(self) -> dict[str, Any] | None:
+        """Return state to dispatch to other steps after processing completes.
 
-        Analogous to emit for items — this method lets a step push
-        state to another step (identified by class name).  The engine
-        injects the dispatch callback before the pipeline runs.
+        Override in subclasses that need to push state to other steps.
+        Called by the Producer after ``close()``.  Return a mapping of
+        ``{target_step_name: state_value}`` or ``None`` if no state
+        dispatch is needed.
         """
-        if self._state_dispatch is None:
-            raise RuntimeError("set_step_state is not available outside pipeline execution")
-        self._state_dispatch(target, state)
+        return None
 
     def open(self) -> None:
-        """Acquire resources right before processing begins.
+        """Acquire resources on the main process before processing begins.
 
         Called once per execution, after ``is_ready()`` passes and before
         the first ``process()`` call.  Paired with ``close()``.
@@ -107,20 +61,104 @@ class BaseStep(ABC):
         Typical use: opening file handles, database connections, or
         temporary directories that should not be created at ``__init__``
         time.
-
-        .. note::
-
-            For PARALLEL steps this runs on the **main-process**
-            instance, not on the worker-process copies.  Worker
-            processes receive a pickle-restored copy of the step
-            and do not call ``open()``.  Use lazy initialisation
-            inside ``process()`` if workers need per-process
-            resources.
         """
 
     def close(self) -> None:
-        """Release resources held by this step.
+        """Release main-process resources after processing ends.
 
         Called by the Producer after the processing loop finishes.
         Override in subclasses that open files, connections, etc.
         """
+
+
+# ---------------------------------------------------------------------------
+# SourceStep
+# ---------------------------------------------------------------------------
+
+
+class SourceStep(StepBase, ABC):
+    """Base class for SOURCE steps that generate items.
+
+    Must implement ``items()`` which yields input items for the pipeline.
+    """
+
+    @abstractmethod
+    def items(self) -> Generator[Any, None, None]:
+        """Yield items to feed into the pipeline."""
+        ...
+
+
+# ---------------------------------------------------------------------------
+# SequentialStep
+# ---------------------------------------------------------------------------
+
+
+class SequentialStep(StepBase, ABC):
+    """Base class for steps that process items sequentially in the main thread.
+
+    Must implement ``process()`` for per-item logic.
+    """
+
+    @abstractmethod
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
+        """Process a single item.
+
+        *emit(item, tag)* — callback provided by the Producer to forward
+        items to the named output.  Call it zero or more times.
+
+        ``outputs = ()`` steps (terminal) must NOT call emit —
+        doing so raises ``RuntimeError``.
+        """
+        ...
+
+
+# ---------------------------------------------------------------------------
+# Worker
+# ---------------------------------------------------------------------------
+
+
+class Worker(ABC):
+    """Processing unit sent to worker processes.
+
+    Instances must be picklable (module-level class, no lambdas/closures).
+    ``open()`` and ``close()`` run once per worker process, bracketing
+    all ``process()`` calls within that process.
+    """
+
+    @abstractmethod
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
+        """Process a single item in a worker process."""
+        ...
+
+    def open(self) -> None:
+        """Called once per worker process before the first ``process()`` call.
+
+        Use for per-process resource acquisition: DB connections,
+        model loading, GPU context, etc.
+        """
+
+    def close(self) -> None:
+        """Called once per worker process after the last ``process()`` call.
+
+        Use for per-process resource cleanup.
+        """
+
+
+# ---------------------------------------------------------------------------
+# ParallelStep
+# ---------------------------------------------------------------------------
+
+
+class ParallelStep(StepBase, ABC):
+    """Base class for steps that distribute work across worker processes.
+
+    Must implement ``create_worker()`` which returns a picklable ``Worker``
+    instance.  The Worker's ``open()``/``close()`` provide per-worker-process
+    lifecycle hooks, while the step's own ``open()``/``close()`` run on the
+    main process only.
+    """
+
+    @abstractmethod
+    def create_worker(self) -> Worker:
+        """Create a picklable Worker instance for worker processes."""
+        ...

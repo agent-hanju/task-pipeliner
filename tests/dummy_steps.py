@@ -9,14 +9,14 @@ from typing import Any
 
 import orjson
 
-from task_pipeliner.base import BaseStep, StepType
+from task_pipeliner.base import ParallelStep, SequentialStep, SourceStep, Worker
 
 # ---------------------------------------------------------------------------
-# Dummy steps
+# SOURCE steps
 # ---------------------------------------------------------------------------
 
 
-class DummySourceStep(BaseStep):
+class DummySourceStep(SourceStep):
     """SOURCE step that yields a fixed list of items."""
 
     outputs = ("main",)
@@ -25,31 +25,20 @@ class DummySourceStep(BaseStep):
         self._items = items or []
         self.closed = False
 
-    @property
-    def step_type(self) -> StepType:
-        return StepType.SOURCE
-
     def items(self) -> Generator[Any, None, None]:
         yield from self._items
-
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
-        raise NotImplementedError("SOURCE step does not process")
 
     def close(self) -> None:
         self.closed = True
 
 
-class DummyJsonlSourceStep(BaseStep):
+class DummyJsonlSourceStep(SourceStep):
     """SOURCE step that reads JSONL files (for testing)."""
 
     outputs = ("main",)
 
     def __init__(self, items: list[str] | None = None, **_kwargs: Any) -> None:
         self._paths = [Path(p) for p in items] if items else []
-
-    @property
-    def step_type(self) -> StepType:
-        return StepType.SOURCE
 
     def items(self) -> Generator[Any, None, None]:
         for p in self._paths:
@@ -59,48 +48,50 @@ class DummyJsonlSourceStep(BaseStep):
                     if stripped:
                         yield orjson.loads(stripped)
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
-        raise NotImplementedError("SOURCE step does not process")
+
+# ---------------------------------------------------------------------------
+# PARALLEL steps (Worker + Step pairs)
+# ---------------------------------------------------------------------------
 
 
-class PassthroughStep(BaseStep):
+class PassthroughWorker(Worker):
     """Emits item unchanged."""
-
-    outputs = ("main",)
-
-    @property
-    def step_type(self) -> StepType:
-        return StepType.PARALLEL
 
     def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         emit(item, "main")
 
 
-class FilterEvenStep(BaseStep):
-    """Emits even integers, filters out odd ones."""
+class PassthroughStep(ParallelStep):
+    """Emits item unchanged."""
 
     outputs = ("main",)
 
-    @property
-    def step_type(self) -> StepType:
-        return StepType.PARALLEL
+    def create_worker(self) -> PassthroughWorker:
+        return PassthroughWorker()
+
+
+class FilterEvenWorker(Worker):
+    """Emits even integers, filters out odd ones."""
 
     def process(self, item: int, state: Any, emit: Callable[[Any, str], None]) -> None:
         if item % 2 == 0:
             emit(item, "main")
 
 
-class ErrorOnItemStep(BaseStep):
-    """Raises RuntimeError when item matches error_value."""
+class FilterEvenStep(ParallelStep):
+    """Emits even integers, filters out odd ones."""
 
     outputs = ("main",)
 
+    def create_worker(self) -> FilterEvenWorker:
+        return FilterEvenWorker()
+
+
+class ErrorOnItemWorker(Worker):
+    """Raises RuntimeError when item matches error_value."""
+
     def __init__(self, error_value: Any = -1) -> None:
         self.error_value = error_value
-
-    @property
-    def step_type(self) -> StepType:
-        return StepType.PARALLEL
 
     def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         if item == self.error_value:
@@ -108,7 +99,30 @@ class ErrorOnItemStep(BaseStep):
         emit(item, "main")
 
 
-class SlowStep(BaseStep):
+class ErrorOnItemStep(ParallelStep):
+    """Raises RuntimeError when item matches error_value."""
+
+    outputs = ("main",)
+
+    def __init__(self, error_value: Any = -1) -> None:
+        self.error_value = error_value
+
+    def create_worker(self) -> ErrorOnItemWorker:
+        return ErrorOnItemWorker(self.error_value)
+
+
+class SlowWorker(Worker):
+    """Sleeps before emitting item."""
+
+    def __init__(self, sleep_seconds: float = 0.1) -> None:
+        self.sleep_seconds = sleep_seconds
+
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
+        time.sleep(self.sleep_seconds)
+        emit(item, "main")
+
+
+class SlowStep(ParallelStep):
     """Sleeps before emitting item."""
 
     outputs = ("main",)
@@ -116,34 +130,59 @@ class SlowStep(BaseStep):
     def __init__(self, sleep_seconds: float = 0.1) -> None:
         self.sleep_seconds = sleep_seconds
 
-    @property
-    def step_type(self) -> StepType:
-        return StepType.PARALLEL
+    def create_worker(self) -> SlowWorker:
+        return SlowWorker(self.sleep_seconds)
+
+
+# ---------------------------------------------------------------------------
+# SEQUENTIAL steps
+# ---------------------------------------------------------------------------
+
+
+class SequentialPassthroughStep(SequentialStep):
+    """Sequential step that emits item unchanged (for testing SequentialProducer)."""
+
+    outputs = ("main",)
 
     def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
-        time.sleep(self.sleep_seconds)
         emit(item, "main")
 
 
-class TerminalStep(BaseStep):
-    """Terminal step — outputs = (), emit not allowed."""
+class SequentialFilterEvenStep(SequentialStep):
+    """Sequential step that emits even integers, filters out odd ones."""
 
-    @property
-    def step_type(self) -> StepType:
-        return StepType.SEQUENTIAL
+    outputs = ("main",)
+
+    def process(self, item: int, state: Any, emit: Callable[[Any, str], None]) -> None:
+        if item % 2 == 0:
+            emit(item, "main")
+
+
+class SequentialErrorOnItemStep(SequentialStep):
+    """Sequential step that raises RuntimeError when item matches error_value."""
+
+    outputs = ("main",)
+
+    def __init__(self, error_value: Any = -1) -> None:
+        self.error_value = error_value
+
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
+        if item == self.error_value:
+            raise RuntimeError(f"Error triggered on item {item!r}")
+        emit(item, "main")
+
+
+class TerminalStep(SequentialStep):
+    """Terminal step — outputs = (), emit not allowed."""
 
     def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         pass  # Terminal step should NOT call emit
 
 
-class BranchEvenOddStep(BaseStep):
+class BranchEvenOddStep(SequentialStep):
     """Routes even items to 'even' tag, odd items to 'odd' tag."""
 
     outputs = ("even", "odd")
-
-    @property
-    def step_type(self) -> StepType:
-        return StepType.SEQUENTIAL
 
     def process(self, item: int, state: Any, emit: Callable[[Any, str], None]) -> None:
         if item % 2 == 0:
@@ -152,14 +191,10 @@ class BranchEvenOddStep(BaseStep):
             emit(item, "odd")
 
 
-class StateAwareStep(BaseStep):
+class StateAwareStep(SequentialStep):
     """Multiplies item by state['multiplier'] and emits."""
 
     outputs = ("main",)
-
-    @property
-    def step_type(self) -> StepType:
-        return StepType.SEQUENTIAL
 
     def process(
         self, item: int, state: dict[str, Any], emit: Callable[[Any, str], None]
@@ -167,16 +202,12 @@ class StateAwareStep(BaseStep):
         emit(state["multiplier"] * item, "main")
 
 
-class CollectorStep(BaseStep):
+class CollectorStep(SequentialStep):
     """SEQUENTIAL terminal — collects items, sets another step's state on close."""
 
     def __init__(self, target_step: str = "StateGatedStep") -> None:
         self._collected: list[Any] = []
         self._target_step = target_step
-
-    @property
-    def step_type(self) -> StepType:
-        return StepType.SEQUENTIAL
 
     @property
     def initial_state(self) -> list[Any]:
@@ -187,18 +218,14 @@ class CollectorStep(BaseStep):
     ) -> None:
         state.append(item)
 
-    def close(self) -> None:
-        self.set_step_state(self._target_step, list(self._collected))
+    def get_output_state(self) -> dict[str, Any] | None:
+        return {self._target_step: list(self._collected)}
 
 
-class StateGatedStep(BaseStep):
+class StateGatedStep(SequentialStep):
     """SEQUENTIAL step gated by is_ready — waits until state is not None."""
 
     outputs = ("main",)
-
-    @property
-    def step_type(self) -> StepType:
-        return StepType.SEQUENTIAL
 
     def is_ready(self, state: Any) -> bool:
         return state is not None
@@ -209,12 +236,8 @@ class StateGatedStep(BaseStep):
         emit({"item": item, "state_len": len(state)}, "main")
 
 
-class LifecycleTrackingStep(BaseStep):
+class LifecycleTrackingStep(SequentialStep):
     """SEQUENTIAL terminal — tracks open/close calls for lifecycle testing."""
-
-    @property
-    def step_type(self) -> StepType:
-        return StepType.SEQUENTIAL
 
     def __init__(self, **_kwargs: Any) -> None:
         self.opened = False
@@ -231,14 +254,10 @@ class LifecycleTrackingStep(BaseStep):
         self.closed = True
 
 
-class InitialStateStep(BaseStep):
+class InitialStateStep(SequentialStep):
     """SEQUENTIAL step that provides initial_state and mutates it during process()."""
 
     outputs = ("main",)
-
-    @property
-    def step_type(self) -> StepType:
-        return StepType.SEQUENTIAL
 
     @property
     def initial_state(self) -> dict[str, int]:

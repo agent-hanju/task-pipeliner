@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from task_pipeliner.base import BaseStep, StepType
+from task_pipeliner.base import (
+    ParallelStep,
+    SequentialStep,
+    SourceStep,
+    Worker,
+)
 from task_pipeliner.config import (
     ExecutionConfig,
     PipelineConfig,
@@ -66,119 +72,35 @@ class TestConfigValidationError:
 # ── W-02: base ────────────────────────────────────────────────────
 
 
-class TestStepType:
-    def test_enum_values(self) -> None:
-        assert StepType.PARALLEL.value == "parallel"
-        assert StepType.SEQUENTIAL.value == "sequential"
-        assert StepType.SOURCE.value == "source"
-
-
-class TestBaseStep:
-    def test_cannot_instantiate_directly(self) -> None:
-        with pytest.raises(TypeError):
-            BaseStep()  # type: ignore[abstract]
-
-    def test_name_defaults_to_class_name(self) -> None:
-        class MyStep(BaseStep):
-            step_type = StepType.PARALLEL
-
-            def process(self, item: Any, state: Any, emit: Any) -> None:
-                pass
-
-        assert MyStep().name == "MyStep"
-
-    def test_name_override(self) -> None:
-        class Custom(BaseStep):
-            step_type = StepType.PARALLEL
-
-            @property
-            def name(self) -> str:
-                return "custom_name"
-
-            def process(self, item: Any, state: Any, emit: Any) -> None:
-                pass
-
-        assert Custom().name == "custom_name"
-
-    def test_step_type_required(self) -> None:
-        """Subclass without step_type cannot be instantiated."""
-        with pytest.raises(TypeError):
-
-            class Bad(BaseStep):
-                def process(self, item: Any, state: Any, emit: Any) -> None:
-                    pass
-
-            Bad()  # type: ignore[abstract]
+class TestStepBase:
+    """Tests for shared StepBase functionality."""
 
     def test_outputs_defaults_to_empty_tuple(self) -> None:
-        """BaseStep.outputs defaults to () — terminal step."""
-
-        class TerminalStep(BaseStep):
-            step_type = StepType.PARALLEL
-
+        class MyStep(SequentialStep):
             def process(self, item: Any, state: Any, emit: Any) -> None:
                 pass
 
-        assert TerminalStep.outputs == ()
-        assert TerminalStep().outputs == ()
+        assert MyStep.outputs == ()
+        assert MyStep().outputs == ()
 
     def test_outputs_can_be_declared(self) -> None:
-        """Subclass can declare named outputs."""
-
-        class BranchStep(BaseStep):
-            step_type = StepType.PARALLEL
+        class MyStep(SequentialStep):
             outputs = ("kept", "removed")
 
             def process(self, item: Any, state: Any, emit: Any) -> None:
-                emit(item, "kept")
-
-        assert BranchStep.outputs == ("kept", "removed")
-
-    def test_process_emit_with_tag(self) -> None:
-        """emit(item, tag) — tag is required second argument."""
-        collected: list[tuple[Any, str]] = []
-
-        class TaggedStep(BaseStep):
-            step_type = StepType.PARALLEL
-            outputs = ("out",)
-
-            def process(self, item: Any, state: Any, emit: Any) -> None:
-                emit(item, "out")
-
-        step = TaggedStep()
-        step.process("hello", None, lambda i, t: collected.append((i, t)))
-        assert collected == [("hello", "out")]
-
-    def test_items_raises_not_implemented_by_default(self) -> None:
-        """Non-SOURCE steps should raise NotImplementedError on items()."""
-
-        class NormalStep(BaseStep):
-            step_type = StepType.PARALLEL
-
-            def process(self, item: Any, state: Any, emit: Any) -> None:
                 pass
 
-        step = NormalStep()
-        with pytest.raises(NotImplementedError):
-            list(step.items())
+        assert MyStep.outputs == ("kept", "removed")
 
     def test_initial_state_defaults_to_none(self) -> None:
-        """BaseStep.initial_state defaults to None."""
-
-        class SimpleStep(BaseStep):
-            step_type = StepType.PARALLEL
-
+        class MyStep(SequentialStep):
             def process(self, item: Any, state: Any, emit: Any) -> None:
                 pass
 
-        assert SimpleStep().initial_state is None
+        assert MyStep().initial_state is None
 
     def test_initial_state_override(self) -> None:
-        """Subclass can override initial_state to return custom state."""
-
-        class StatefulStep(BaseStep):
-            step_type = StepType.SEQUENTIAL
-
+        class MyStep(SequentialStep):
             @property
             def initial_state(self) -> dict[str, int]:
                 return {"count": 0}
@@ -186,41 +108,25 @@ class TestBaseStep:
             def process(self, item: Any, state: Any, emit: Any) -> None:
                 pass
 
-        step = StatefulStep()
+        step = MyStep()
         assert step.initial_state == {"count": 0}
-        # Each access should return a fresh dict (not cached)
-        assert step.initial_state is not step.initial_state or step.initial_state == {"count": 0}
 
     def test_open_is_noop_by_default(self) -> None:
-        """open() should be callable without error (no-op)."""
-
-        class NormalStep(BaseStep):
-            step_type = StepType.PARALLEL
-
+        class MyStep(SequentialStep):
             def process(self, item: Any, state: Any, emit: Any) -> None:
                 pass
 
-        step = NormalStep()
-        step.open()  # should not raise
+        MyStep().open()  # should not raise
 
     def test_close_is_noop_by_default(self) -> None:
-        """close() should be callable without error (no-op)."""
-
-        class NormalStep(BaseStep):
-            step_type = StepType.PARALLEL
-
+        class MyStep(SequentialStep):
             def process(self, item: Any, state: Any, emit: Any) -> None:
                 pass
 
-        step = NormalStep()
-        step.close()  # should not raise
+        MyStep().close()  # should not raise
 
     def test_open_close_symmetry(self) -> None:
-        """Subclass can override both open() and close() for resource management."""
-
-        class ResourceStep(BaseStep):
-            step_type = StepType.SEQUENTIAL
-
+        class ResourceStep(SequentialStep):
             def __init__(self) -> None:
                 self.opened = False
                 self.closed = False
@@ -240,6 +146,81 @@ class TestBaseStep:
         assert step.opened and not step.closed
         step.close()
         assert step.opened and step.closed
+
+
+class TestSourceStep:
+    def test_cannot_instantiate_without_items(self) -> None:
+        with pytest.raises(TypeError):
+            SourceStep()  # type: ignore[abstract]
+
+    def test_items_abstract(self) -> None:
+        class MySource(SourceStep):
+            outputs = ("main",)
+
+            def items(self) -> Generator[Any, None, None]:
+                yield 1
+                yield 2
+
+        assert list(MySource().items()) == [1, 2]
+
+
+class TestSequentialStep:
+    def test_cannot_instantiate_without_process(self) -> None:
+        with pytest.raises(TypeError):
+            SequentialStep()  # type: ignore[abstract]
+
+    def test_process_emit_with_tag(self) -> None:
+        collected: list[tuple[Any, str]] = []
+
+        class MyStep(SequentialStep):
+            outputs = ("out",)
+
+            def process(self, item: Any, state: Any, emit: Any) -> None:
+                emit(item, "out")
+
+        step = MyStep()
+        step.process("hello", None, lambda i, t: collected.append((i, t)))
+        assert collected == [("hello", "out")]
+
+
+class TestWorker:
+    def test_cannot_instantiate_without_process(self) -> None:
+        with pytest.raises(TypeError):
+            Worker()  # type: ignore[abstract]
+
+    def test_open_close_noop_by_default(self) -> None:
+        class MyWorker(Worker):
+            def process(
+                self, item: Any, state: Any, emit: Callable[[Any, str], None]
+            ) -> None:
+                pass
+
+        w = MyWorker()
+        w.open()   # should not raise
+        w.close()  # should not raise
+
+
+class TestParallelStep:
+    def test_cannot_instantiate_without_create_worker(self) -> None:
+        with pytest.raises(TypeError):
+            ParallelStep()  # type: ignore[abstract]
+
+    def test_create_worker_returns_worker(self) -> None:
+        class MyWorker(Worker):
+            def process(
+                self, item: Any, state: Any, emit: Callable[[Any, str], None]
+            ) -> None:
+                emit(item, "main")
+
+        class MyStep(ParallelStep):
+            outputs = ("main",)
+
+            def create_worker(self) -> MyWorker:
+                return MyWorker()
+
+        step = MyStep()
+        worker = step.create_worker()
+        assert isinstance(worker, Worker)
 
 
 # ── W-03: config ──────────────────────────────────────────────────
@@ -275,7 +256,8 @@ class TestStepConfig:
     def test_outputs_fan_out(self) -> None:
         """list[str] value = fan-out to multiple downstream steps."""
         cfg = StepConfig(
-            type="preprocess", outputs={"kept": ["convert", "audit"], "removed": "writer"}
+            type="preprocess",
+            outputs={"kept": ["convert", "audit"], "removed": "writer"},
         )
         assert cfg.outputs is not None
         assert cfg.outputs["kept"] == ["convert", "audit"]
@@ -371,7 +353,10 @@ class TestPipelineConfig:
         with pytest.raises(ConfigValidationError):
             PipelineConfig(
                 pipeline=[
-                    StepConfig(type="loader", outputs={"main": ["filter", "ghost"]}),
+                    StepConfig(
+                        type="loader",
+                        outputs={"main": ["filter", "ghost"]},
+                    ),
                     StepConfig(type="filter"),
                 ]
             )
@@ -380,7 +365,10 @@ class TestPipelineConfig:
         """Fan-out with all valid references passes validation."""
         cfg = PipelineConfig(
             pipeline=[
-                StepConfig(type="loader", outputs={"main": ["filter", "writer"]}),
+                StepConfig(
+                    type="loader",
+                    outputs={"main": ["filter", "writer"]},
+                ),
                 StepConfig(type="filter"),
                 StepConfig(type="writer"),
             ]
@@ -392,7 +380,11 @@ class TestLoadConfig:
     def test_valid_yaml(self, tmp_path: Path) -> None:
         yaml_file = tmp_path / "config.yaml"
         yaml_file.write_text(
-            "pipeline:\n  - type: filter\n    threshold: 0.5\nexecution:\n  workers: 2\n"
+            "pipeline:\n"
+            "  - type: filter\n"
+            "    threshold: 0.5\n"
+            "execution:\n"
+            "  workers: 2\n"
         )
         cfg = load_config(yaml_file)
         assert cfg.pipeline[0].type == "filter"
@@ -432,7 +424,10 @@ class TestLoadConfig:
         )
         cfg = load_config(yaml_file)
         assert cfg.pipeline[0].outputs == {"main": "preprocess"}
-        assert cfg.pipeline[1].outputs == {"kept": "writer", "removed": "writer"}
+        assert cfg.pipeline[1].outputs == {
+            "kept": "writer",
+            "removed": "writer",
+        }
         assert cfg.pipeline[2].outputs is None
 
     def test_name_defaults_to_type(self, tmp_path: Path) -> None:
@@ -510,8 +505,15 @@ class TestLoadConfig:
         with pytest.raises(ConfigValidationError):
             load_config(yaml_file)
 
-    def test_yaml_outputs_reference_invalid_step_raises(self, tmp_path: Path) -> None:
+    def test_yaml_outputs_reference_invalid_step_raises(
+        self, tmp_path: Path
+    ) -> None:
         yaml_file = tmp_path / "bad_topo.yaml"
-        yaml_file.write_text("pipeline:\n  - type: loader\n    outputs:\n      main: ghost\n")
+        yaml_file.write_text(
+            "pipeline:\n"
+            "  - type: loader\n"
+            "    outputs:\n"
+            "      main: ghost\n"
+        )
         with pytest.raises(ConfigValidationError):
             load_config(yaml_file)

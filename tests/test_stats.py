@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
+from task_pipeliner.pipeline import Pipeline
 from task_pipeliner.stats import StatsCollector, StepStats
 
 
@@ -288,56 +289,53 @@ class TestStatsCollector:
         assert "current_state" in entry
         assert entry["current_state"] == "done"
 
-    def test_setup_log_handler_and_flush(self, tmp_path: Path) -> None:
-        c = StatsCollector()
-        log_path = tmp_path / "pipeline.log"
-        c.setup_log_handler(log_path)
-        try:
-            parent_logger = logging.getLogger("task_pipeliner")
-            parent_logger.warning("test message")
-            c.flush()
-            assert log_path.exists()
-            assert "test message" in log_path.read_text(encoding="utf-8")
-        finally:
-            # Ensure cleanup even if test fails
-            c.flush()
-
-    def test_flush_removes_handler(self, tmp_path: Path) -> None:
-        c = StatsCollector()
-        log_path = tmp_path / "pipeline.log"
-        c.setup_log_handler(log_path)
-        parent_logger = logging.getLogger("task_pipeliner")
-        handler_count_before = len(parent_logger.handlers)
-        c.flush()
-        handler_count_after = len(parent_logger.handlers)
-        assert handler_count_after == handler_count_before - 1
-        assert c._handler is None
-
-    def test_flush_without_handler_is_noop(self) -> None:
+    def test_flush_is_noop(self) -> None:
         c = StatsCollector()
         c.flush()  # should not raise
 
-    def test_setup_log_handler_creates_directory(self, tmp_path: Path) -> None:
-        c = StatsCollector()
+
+class TestPipelineLogHandler:
+    """Tests for Pipeline._setup_log_handler / _teardown_log_handler."""
+
+    def test_setup_and_teardown(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "pipeline.log"
+        handler = Pipeline._setup_log_handler(log_path)
+        try:
+            pkg_logger = logging.getLogger("task_pipeliner")
+            pkg_logger.warning("test message")
+            handler.flush()
+            assert log_path.exists()
+            assert "test message" in log_path.read_text(encoding="utf-8")
+        finally:
+            Pipeline._teardown_log_handler(handler)
+
+    def test_teardown_removes_handler(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "pipeline.log"
+        handler = Pipeline._setup_log_handler(log_path)
+        pkg_logger = logging.getLogger("task_pipeliner")
+        count_before = len(pkg_logger.handlers)
+        Pipeline._teardown_log_handler(handler)
+        count_after = len(pkg_logger.handlers)
+        assert count_after == count_before - 1
+
+    def test_setup_creates_directory(self, tmp_path: Path) -> None:
         log_path = tmp_path / "sub" / "pipeline.log"
-        c.setup_log_handler(log_path)
+        handler = Pipeline._setup_log_handler(log_path)
         try:
             assert log_path.parent.exists()
         finally:
-            c.flush()
+            Pipeline._teardown_log_handler(handler)
 
-    def test_setup_log_handler_format(self, tmp_path: Path) -> None:
+    def test_log_format(self, tmp_path: Path) -> None:
         """Log output follows the expected format with module:func:lineno."""
-        c = StatsCollector()
         log_path = tmp_path / "pipeline.log"
-        c.setup_log_handler(log_path)
+        handler = Pipeline._setup_log_handler(log_path)
         try:
             test_logger = logging.getLogger("task_pipeliner.test_module")
             test_logger.warning("format check")
-            c.flush()
+            handler.flush()
             content = log_path.read_text(encoding="utf-8")
-            # Should contain the logger name with colon-separated func and lineno
             assert "task_pipeliner.test_module:" in content
             assert "format check" in content
         finally:
-            c.flush()
+            Pipeline._teardown_log_handler(handler)

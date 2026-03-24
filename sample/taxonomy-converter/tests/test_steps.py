@@ -35,33 +35,29 @@ class TestPreprocessStep:
 
     @pytest.mark.timeout(15)
     def test_normal_article_emitted(self) -> None:
-        step = PreprocessStep()
+        worker = PreprocessStep().create_worker()
         collector = _Collector()
         item = copy.deepcopy(SAMPLE_NAVER_ITEM)
-        result = step.process(item, None, collector)
+        worker.process(item, None, collector)
         assert len(collector.items) == 1
         assert collector.items[0][1] == "kept"
-        assert result.success == 1
-        assert result.skipped == 0
 
     @pytest.mark.timeout(15)
     def test_short_article_skipped(self) -> None:
-        step = PreprocessStep()
+        worker = PreprocessStep().create_worker()
         collector = _Collector()
         item = copy.deepcopy(SAMPLE_SHORT_ITEM)
-        result = step.process(item, None, collector)
+        worker.process(item, None, collector)
         assert len(collector.items) == 1
         assert collector.items[0][1] == "removed"
-        assert result.skipped == 1
-        assert result.success == 0
 
     @pytest.mark.timeout(15)
     def test_dirty_article_lines_filtered(self) -> None:
-        step = PreprocessStep()
+        worker = PreprocessStep().create_worker()
         collector = _Collector()
         item = copy.deepcopy(SAMPLE_DIRTY_ITEM)
-        result = step.process(item, None, collector)
-        assert result.success == 1
+        worker.process(item, None, collector)
+        assert len(collector.items) == 1
         emitted_item, emitted_tag = collector.items[0]
         assert emitted_tag == "kept"
         emitted_text: str = emitted_item["text"]
@@ -72,12 +68,12 @@ class TestPreprocessStep:
 
     @pytest.mark.timeout(15)
     def test_result_counts(self) -> None:
-        step = PreprocessStep()
-        r1 = step.process(copy.deepcopy(SAMPLE_NAVER_ITEM), None, _Collector())
-        r2 = step.process(copy.deepcopy(SAMPLE_SHORT_ITEM), None, _Collector())
-        merged = r1.merge(r2)
-        assert merged.success == 1
-        assert merged.skipped == 1
+        worker = PreprocessStep().create_worker()
+        c1, c2 = _Collector(), _Collector()
+        worker.process(copy.deepcopy(SAMPLE_NAVER_ITEM), None, c1)
+        worker.process(copy.deepcopy(SAMPLE_SHORT_ITEM), None, c2)
+        assert c1.items[0][1] == "kept"
+        assert c2.items[0][1] == "removed"
 
 
 # ---------------------------------------------------------------------------
@@ -90,11 +86,10 @@ class TestConvertStep:
 
     @pytest.mark.timeout(15)
     def test_normal_conversion(self) -> None:
-        step = ConvertStep()
+        worker = ConvertStep().create_worker()
         collector = _Collector()
         item = copy.deepcopy(SAMPLE_NAVER_ITEM)
-        result = step.process(item, None, collector)
-        assert result.success == 1
+        worker.process(item, None, collector)
         assert len(collector.items) == 1
         taxonomy, tag = collector.items[0]
         assert tag == "kept"
@@ -108,22 +103,22 @@ class TestConvertStep:
 
     @pytest.mark.timeout(15)
     def test_id_format(self) -> None:
-        step = ConvertStep()
+        worker = ConvertStep().create_worker()
         collector = _Collector()
         item = copy.deepcopy(SAMPLE_NAVER_ITEM)
-        step.process(item, None, collector)
+        worker.process(item, None, collector)
         taxonomy, tag = collector.items[0]
         assert tag == "kept"
         assert taxonomy["id"] == "HanaTI-NaverNews-20240115-1"
 
     @pytest.mark.timeout(15)
     def test_title_omitted_when_similar(self) -> None:
-        step = ConvertStep()
+        worker = ConvertStep().create_worker()
         collector = _Collector()
         item = copy.deepcopy(SAMPLE_NAVER_ITEM)
         # Make content start with title
         item["text"] = item["title"] + " 관련 상세 내용이 이어집니다."
-        step.process(item, None, collector)
+        worker.process(item, None, collector)
         taxonomy, tag = collector.items[0]
         assert tag == "kept"
         # Title should be omitted since content starts similarly
@@ -131,10 +126,10 @@ class TestConvertStep:
 
     @pytest.mark.timeout(15)
     def test_metadata_fields(self) -> None:
-        step = ConvertStep()
+        worker = ConvertStep().create_worker()
         collector = _Collector()
         item = copy.deepcopy(SAMPLE_NAVER_ITEM)
-        step.process(item, None, collector)
+        worker.process(item, None, collector)
         taxonomy, tag = collector.items[0]
         assert tag == "kept"
         assert taxonomy["metadata"]["source"] == "HanaTI/NaverNewsEconomy"
@@ -142,11 +137,11 @@ class TestConvertStep:
 
     @pytest.mark.timeout(15)
     def test_missing_index_errors(self) -> None:
-        step = ConvertStep()
+        worker = ConvertStep().create_worker()
         collector = _Collector()
         item = {"text": "some text", "_date_prefix": "20240101"}
-        result = step.process(item, None, collector)
-        assert result.errored == 1
+        worker.process(item, None, collector)
+        # Error is logged but item is silently dropped (no emit)
         assert len(collector.items) == 0
 
 
@@ -193,13 +188,7 @@ class TestDeduplicateStep:
         step = DeduplicateStep()
         collector = _Collector()
         base_item = {"id": "test-id", "text": "same content"}
-        total_success = 0
-        total_skipped = 0
-        # First unique item + n duplicates
         for i in range(1 + n):
-            result = step.process(copy.deepcopy(base_item), None, collector)
-            total_success += result.success
-            total_skipped += result.skipped
-        assert total_success == 1
-        assert total_skipped == n
+            step.process(copy.deepcopy(base_item), None, collector)
+        # Only first unique item emitted; n duplicates skipped
         assert len(collector.items) == 1

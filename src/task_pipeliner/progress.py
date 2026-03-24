@@ -28,7 +28,7 @@ def format_progress(
     lines = [header]
 
     for name in step_names:
-        step_stats = stats._stats.get(name)
+        step_stats = stats.get_step_stats(name)
         if step_stats is None:
             continue
 
@@ -41,7 +41,7 @@ def format_progress(
 
         # Emitted summary
         if emitted and processed:
-            kept_parts = []
+            kept_parts: list[str] = []
             for tag, count in emitted.items():
                 kept_parts.append(f"{count} {tag}")
             parts.append(f"{processed} in → {', '.join(kept_parts)}")
@@ -108,7 +108,9 @@ class ProgressReporter(threading.Thread):
         text = format_progress(self._stats, self._step_names, elapsed)
         print(text, file=sys.stderr, flush=True)
         if self._log_fh is not None:
-            self._log_fh.write(text + "\n\n")
+            self._log_fh.seek(0)
+            self._log_fh.write(text + "\n")
+            self._log_fh.truncate()
             self._log_fh.flush()
 
     def stop(self) -> None:
@@ -121,6 +123,6 @@ class ProgressReporter(threading.Thread):
         print(text, file=sys.stderr, flush=True)
         if self._output_dir is not None:
             log_path = self._output_dir / "progress.log"
-            with open(log_path, "a", encoding="utf-8") as fh:
+            with open(log_path, "w", encoding="utf-8") as fh:
                 fh.write(text + "\n")
         logger.debug("ProgressReporter stopped")

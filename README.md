@@ -35,16 +35,12 @@ from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Any
 
-from task_pipeliner import BaseStep, StepType
+from task_pipeliner import ParallelStep, SequentialStep, SourceStep, Worker
 
 
-class LoaderStep(BaseStep):
+class LoaderStep(SourceStep):
     """SOURCE step: reads lines from text files."""
     outputs = ("main",)
-
-    @property
-    def step_type(self) -> StepType:
-        return StepType.SOURCE
 
     def __init__(self, paths: list[str] | None = None, **_: Any) -> None:
         self._paths = [Path(p) for p in (paths or [])]
@@ -55,19 +51,11 @@ class LoaderStep(BaseStep):
                 for line in f:
                     yield {"text": line.strip()}
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
-        raise NotImplementedError
 
+class FilterWorker(Worker):
+    """Worker for FilterStep: filters items by text length."""
 
-class FilterStep(BaseStep):
-    """PARALLEL step: filters items by text length."""
-    outputs = ("kept", "removed")
-
-    @property
-    def step_type(self) -> StepType:
-        return StepType.PARALLEL
-
-    def __init__(self, min_length: int = 10, **_: Any) -> None:
+    def __init__(self, min_length: int) -> None:
         self._min_length = min_length
 
     def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
@@ -77,13 +65,20 @@ class FilterStep(BaseStep):
             emit(item, "removed")
 
 
-class WriterStep(BaseStep):
+class FilterStep(ParallelStep):
+    """PARALLEL step: filters items by text length."""
+    outputs = ("kept", "removed")
+
+    def __init__(self, min_length: int = 10, **_: Any) -> None:
+        self._min_length = min_length
+
+    def create_worker(self) -> FilterWorker:
+        return FilterWorker(self._min_length)
+
+
+class WriterStep(SequentialStep):
     """SEQUENTIAL terminal step: writes items to a JSONL file."""
     outputs = ()  # terminal — no emit allowed
-
-    @property
-    def step_type(self) -> StepType:
-        return StepType.SEQUENTIAL
 
     def __init__(self, output_path: str = "output.jsonl", **_: Any) -> None:
         self._path = Path(output_path)
@@ -148,29 +143,74 @@ task-pipeliner run --config pipeline_config.yaml --output ./output
 
 ## Core Concepts
 
-### BaseStep
+### Step Hierarchy
 
-The abstract base class for all pipeline steps.
+Three abstract base classes for different step types:
+
+| Class | Description | Key Method |
+|-------|-------------|------------|
+| `SourceStep` | First step only. Yields items. | `items()` |
+| `ParallelStep` | CPU-bound parallel processing. | `create_worker() -> Worker` |
+| `SequentialStep` | Stateful single-thread processing. | `process(item, state, emit)` |
+
+**Common interface** (inherited from `StepBase`):
 
 | Method/Property | Required | Description |
 |----------------|----------|-------------|
-| `step_type` | Yes | `StepType.SOURCE`, `PARALLEL`, or `SEQUENTIAL` |
-| `process(item, state, emit)` | Yes | Process a single item. Call `emit(item, tag)` to route outputs. |
 | `outputs` | ClassVar | Tuple of declared output tags. Empty `()` = terminal step. |
-| `items()` | SOURCE only | Generator that yields input items. |
 | `initial_state` | Optional | Returns initial state object for stateful processing. |
 | `is_ready(state)` | Optional | Gate processing until state is available (default: `True`). |
-| `set_step_state(target, state)` | Optional | Push state to another step (triggers `is_ready` re-evaluation). |
+| `get_output_state()` | Optional | Return `{target: state}` dict to dispatch state to other steps after `close()`. |
 | `open()` | Optional | Acquire resources before processing begins (called once, after `is_ready`). |
 | `close()` | Optional | Release resources after processing completes. Paired with `open()`. |
 
-**Step lifecycle:**
+### Worker
+
+A separate picklable class for `ParallelStep`. Workers run in spawned processes.
+
+```python
+class MyWorker(Worker):
+    def __init__(self, config_param: int) -> None:
+        self.config_param = config_param
+        self._model = None  # lazy init not needed — use open()
+
+    def open(self) -> None:
+        """Called once per worker process."""
+        self._model = load_model()
+
+    def process(self, item: Any, state: Any, emit: Callable) -> None:
+        result = self._model.predict(item)
+        emit(result, "main")
+
+    def close(self) -> None:
+        """Called once per worker process on shutdown."""
+        del self._model
+
+class MyStep(ParallelStep):
+    outputs = ("main",)
+
+    def __init__(self, config_param: int = 42) -> None:
+        self.config_param = config_param
+
+    def create_worker(self) -> MyWorker:
+        return MyWorker(self.config_param)
+```
+
+**Lifecycle:**
 
 ```
-__init__(config) → is_ready() gating → open() → process() × N → close()
+Main process:                      Worker process N:
+─────────────                      ─────────────────
+step = ParallelStep(**config)
+worker = step.create_worker()
+worker_bytes = pickle.dumps(worker)
+step.open()
+                                   worker = pickle.loads(worker_bytes)
+                                   worker.open()
+                                   worker.process(item, state, emit) × N
+                                   worker.close()
+step.close()
 ```
-
-> `open()` and `close()` run on the **main process** only. For PARALLEL steps, worker processes receive pickle-restored copies and do not call `open()`.
 
 ### Pipeline
 
@@ -182,14 +222,6 @@ pipeline.register("step_name", StepClass)     # register one
 pipeline.register_all({"name": Class, ...})    # register many
 pipeline.run(config=path_or_config, output_dir=path)
 ```
-
-### StepType
-
-| Type | Execution | Use case |
-|------|-----------|----------|
-| `SOURCE` | Main thread | First step only. Yields items via `items()`. |
-| `PARALLEL` | ProcessPoolExecutor (spawn mode) | Stateless per-item processing. CPU-bound work. |
-| `SEQUENTIAL` | Single thread | Stateful processing: dedup, aggregation, file writes. |
 
 ## Configuration
 
@@ -215,7 +247,7 @@ execution:
 
 ### Config Rules
 
-- First step must be `SOURCE`. No `SOURCE` steps after the first.
+- First step must be `SourceStep`. No `SourceStep` after the first.
 - Each step `name` must be unique. When omitted, defaults to `type`.
 - `outputs` tags must reference step names (not types).
 - Steps with `outputs = ()` are terminal (calling `emit()` raises `RuntimeError`).
@@ -234,7 +266,7 @@ execution:
     category_b: processor_b
 ```
 
-**Fan-in** — multiple steps feed into one. The framework spawns merger threads and waits for all upstreams to complete before forwarding the sentinel:
+**Fan-in** — multiple steps feed into one. The downstream uses a shared input queue and waits for all upstream sentinels before terminating:
 
 ```yaml
 - type: processor_a
@@ -275,30 +307,28 @@ pipeline:
     output_path: ./removed.jsonl
 ```
 
-The `type` field selects which registered class to instantiate. The `name` field (defaulting to `type` when omitted) is the unique identifier used for `outputs` routing, stats tracking, and `set_step_state()` targeting. Existing configs without `name` work unchanged.
+The `type` field selects which registered class to instantiate. The `name` field (defaulting to `type` when omitted) is the unique identifier used for `outputs` routing, stats tracking, and `get_output_state()` targeting. Existing configs without `name` work unchanged.
 
 ### State Gating
 
 For two-pass algorithms (build histogram → clean using histogram):
 
 ```python
-class CollectorStep(BaseStep):
+class CollectorStep(SequentialStep):
     """Pass 1: Accumulate statistics while forwarding items."""
-    step_type = StepType.SEQUENTIAL
     outputs = ("main",)
 
     def process(self, item, state, emit):
         self._histogram.update(item)
         emit(item, "main")             # Forward immediately
 
-    def close(self):
+    def get_output_state(self):
         # After all items processed, dispatch state to gated step (by config name)
-        self.set_step_state("cleaner", self._histogram)
+        return {"cleaner": self._histogram}
 
 
-class CleanerStep(BaseStep):
+class CleanerStep(SequentialStep):
     """Pass 2: Process items using collected statistics."""
-    step_type = StepType.SEQUENTIAL
     outputs = ("kept",)
 
     def is_ready(self, state):
@@ -309,7 +339,7 @@ class CleanerStep(BaseStep):
         emit(cleaned, "kept")
 ```
 
-Items queue up in `CleanerStep` while `is_ready()` returns `False`. Once `CollectorStep.close()` dispatches state via `set_step_state()`, the gated step unblocks and processes all queued items.
+Items queue up in `CleanerStep` while `is_ready()` returns `False`. Once `CollectorStep.close()` completes and the Producer calls `get_output_state()`, the returned state is dispatched to the gated step, which unblocks and processes all queued items.
 
 ### Graceful Shutdown
 
@@ -317,7 +347,7 @@ Items queue up in `CleanerStep` while `is_ready()` returns `False`. Once `Collec
 
 ### Progress Reporting
 
-Real-time progress is printed to stderr and written to `progress.log`:
+Real-time progress is printed to stderr and saved to `progress.log` (overwritten each cycle — only the latest snapshot is kept):
 
 ```
 --- Pipeline Progress (12.3s) -------------------------------------------
@@ -373,20 +403,20 @@ task-pipeliner batch jobs.json
 ### Step-by-step
 
 1. **Define Step classes** at module level (required for spawn-mode pickle):
-   - `SOURCE` step: implement `items()` to yield input data.
-   - `PARALLEL` steps: stateless `process()` for CPU-bound work.
-   - `SEQUENTIAL` steps: stateful `process()` for dedup, aggregation, I/O.
+   - `SourceStep`: implement `items()` to yield input data.
+   - `ParallelStep`: implement `create_worker()` returning a `Worker` with `process()`.
+   - `SequentialStep`: implement `process()` for stateful/sequential work.
    - Terminal steps: set `outputs = ()` and don't call `emit()`.
 
 2. **Write `pipeline_config.yaml`**: define the step DAG with `type`, `outputs`, and step-specific params.
 
 3. **Write `run.py`**: register steps via `Pipeline.register_all()` and call `pipeline.run()`.
 
-4. **Run and inspect**: check `output/stats.json`, `output/pipeline.log`, `output/progress.log`.
+4. **Run and inspect**: check `output/stats.json`, `output/pipeline.log` (execution log), `output/progress.log` (final progress snapshot).
 
 ### Constraints
 
-- **Pickle rule**: All step classes must be defined at module level. No lambdas, closures, or nested classes. `functools.partial` wrapping module-level functions is allowed.
+- **Pickle rule**: All step and worker classes must be defined at module level. No lambdas, closures, or nested classes. `functools.partial` wrapping module-level functions is allowed.
 - **Spawn mode**: Workers use `multiprocessing.get_context("spawn")` for Windows/Linux compatibility. The engine validates picklability at registration time.
 - **Error handling**: Exceptions in `process()` are caught, logged as WARNING, and the item is skipped. The `errored` counter increments in stats.
 
@@ -394,12 +424,16 @@ task-pipeliner batch jobs.json
 
 | Class | Module | Description |
 |-------|--------|-------------|
-| `Pipeline` | `task_pipeliner` | Register steps, run pipeline |
-| `BaseStep` | `task_pipeliner` | Abstract base for all steps |
-| `StepType` | `task_pipeliner` | Enum: `SOURCE`, `PARALLEL`, `SEQUENTIAL` |
-| `PipelineError` | `task_pipeliner` | Base exception |
-| `StepRegistrationError` | `task_pipeliner` | Duplicate/unpicklable registration |
-| `ConfigValidationError` | `task_pipeliner` | Invalid YAML config |
+| `Pipeline` | `task_pipeliner.pipeline` | Register steps, run pipeline |
+| `StepRegistry` | `task_pipeliner.pipeline` | Step name → class mapping with pickle validation |
+| `StepBase` | `task_pipeliner.base` | Common interface for all step types (outputs, state, lifecycle) |
+| `SourceStep` | `task_pipeliner.base` | ABC for SOURCE steps (yields items) |
+| `SequentialStep` | `task_pipeliner.base` | ABC for SEQUENTIAL steps (process in main thread) |
+| `ParallelStep` | `task_pipeliner.base` | ABC for PARALLEL steps (create workers for subprocesses) |
+| `Worker` | `task_pipeliner.base` | ABC for worker objects sent to subprocesses |
+| `PipelineError` | `task_pipeliner.exceptions` | Base exception |
+| `StepRegistrationError` | `task_pipeliner.exceptions` | Duplicate/unpicklable registration |
+| `ConfigValidationError` | `task_pipeliner.exceptions` | Invalid YAML config |
 | `PipelineConfig` | `task_pipeliner.config` | Pydantic model for pipeline config |
 | `StepConfig` | `task_pipeliner.config` | Pydantic model for step config |
 | `ExecutionConfig` | `task_pipeliner.config` | Pydantic model for execution settings |

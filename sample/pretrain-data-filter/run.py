@@ -16,9 +16,8 @@ from steps import (
     WriterStep,
 )
 
+from task_pipeliner import Pipeline
 from task_pipeliner.config import StepConfig, load_config
-from task_pipeliner.engine import PipelineEngine, StepRegistry
-from task_pipeliner.stats import StatsCollector
 
 logger = logging.getLogger(__name__)
 
@@ -89,24 +88,17 @@ def main(
                 **{k: v for k, v in extra.items() if k != "output_dir"},
             )
 
-    registry = StepRegistry()
-    registry.register("loader", LoaderStep)
-    registry.register("quality_filter", QualityFilterStep)
-    registry.register("hash_compute", HashComputeStep)
-    registry.register("hash_lookup", HashLookupStep)
-    registry.register("minhash_compute", MinHashComputeStep)
-    registry.register("minhash_lookup", MinHashLookupStep)
-    registry.register("writer", WriterStep)
-
-    stats = StatsCollector()
-    stats.setup_log_handler(output_dir / "pipeline.log")
-
-    try:
-        engine = PipelineEngine(config=cfg, registry=registry, stats=stats)
-        engine.run(output_dir=output_dir)
-        logger.info("pipeline run completed config=%s", config_path)
-    finally:
-        stats.flush()
+    pipeline = Pipeline()
+    pipeline.register_all({
+        "loader": LoaderStep,
+        "quality_filter": QualityFilterStep,
+        "hash_compute": HashComputeStep,
+        "hash_lookup": HashLookupStep,
+        "minhash_compute": MinHashComputeStep,
+        "minhash_lookup": MinHashLookupStep,
+        "writer": WriterStep,
+    })
+    pipeline.run(config=cfg, output_dir=output_dir)
 
 
 if __name__ == "__main__":

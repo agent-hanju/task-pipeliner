@@ -7,7 +7,7 @@ import threading
 from typing import Any
 
 import pytest
-from dummy_steps import PassthroughStep, SlowStep
+from dummy_steps import SequentialPassthroughStep, SlowStep
 
 from task_pipeliner.producers import (
     ParallelProducer,
@@ -27,7 +27,7 @@ class TestBackpressure:
         out_q: multiprocessing.Queue[Any] = ctx.Queue(maxsize=3)
 
         stats = StatsCollector()
-        stats.register("PassthroughStep")
+        stats.register("SequentialPassthroughStep")
 
         # Put more items than maxsize
         for i in range(10):
@@ -35,11 +35,11 @@ class TestBackpressure:
         in_q.put(Sentinel())
 
         producer = SequentialProducer(
-            step=PassthroughStep(),
+            step=SequentialPassthroughStep(),
+            step_name="SequentialPassthroughStep",
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-
         )
 
         # Run producer in thread — it will block when out_q fills up
@@ -68,7 +68,7 @@ class TestBackpressure:
         out_q: multiprocessing.Queue[Any] = ctx.Queue(maxsize=2)
 
         stats = StatsCollector()
-        stats.register("PassthroughStep")
+        stats.register("SequentialPassthroughStep")
 
         n = 50
         for i in range(n):
@@ -76,11 +76,11 @@ class TestBackpressure:
         in_q.put(Sentinel())
 
         producer = SequentialProducer(
-            step=PassthroughStep(),
+            step=SequentialPassthroughStep(),
+            step_name="SequentialPassthroughStep",
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-
         )
 
         t = threading.Thread(target=producer.run)
@@ -114,10 +114,10 @@ class TestBackpressure:
 
         producer = ParallelProducer(
             step=SlowStep(sleep_seconds=0.01),
+            step_name="SlowStep",
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-
             workers=2,
             chunk_size=5,
         )

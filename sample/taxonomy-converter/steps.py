@@ -10,23 +10,24 @@ from typing import Any, BinaryIO
 import orjson
 from loader import load_items
 from naver_rules import apply_naver_line_inline, apply_naver_transforms, should_filter_line
-from taxonomy import TaxonomyDict, TaxonomyResult
+from taxonomy import TaxonomyDict
 from text_rules import normalize_text
 from utils import make_metadata, merge_title, parse_date
 
-from task_pipeliner import BaseStep, StepType
+from task_pipeliner import ParallelStep, SequentialStep, SourceStep, Worker
 
 logger = logging.getLogger(__name__)
 
 
-class LoaderStep(BaseStep[TaxonomyResult]):
-    """SOURCE step that loads items from JSON/JSONL files.
+# ---------------------------------------------------------------------------
+# SOURCE
+# ---------------------------------------------------------------------------
 
-    Wraps loader.load_items() as a pipeline SOURCE step.
-    """
+
+class LoaderStep(SourceStep):
+    """SOURCE step that loads items from JSON/JSONL files."""
 
     outputs = ("main",)
-    step_type = StepType.SOURCE
 
     def __init__(self, paths: list[str] | None = None, **_kwargs: Any) -> None:
         self._paths = [Path(p) for p in paths] if paths else []
@@ -35,28 +36,20 @@ class LoaderStep(BaseStep[TaxonomyResult]):
         logger.info("loading from %d paths", len(self._paths))
         yield from load_items(self._paths)
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> TaxonomyResult:
-        raise NotImplementedError("SOURCE step does not process")
+
+# ---------------------------------------------------------------------------
+# PARALLEL — Preprocess
+# ---------------------------------------------------------------------------
 
 
-class PreprocessStep(BaseStep[TaxonomyResult]):
-    """Text preprocessing step (PARALLEL).
+class PreprocessWorker(Worker):
+    """Normalizes text, applies Naver-specific transforms, validates result."""
 
-    Normalizes text, applies Naver-specific transforms,
-    filters/transforms lines, validates result.
-    """
-
-    outputs = ("kept", "removed")
-
-    def __init__(self, min_lines: int = 2, min_chars: int = 100, **_kwargs: Any) -> None:
+    def __init__(self, min_lines: int, min_chars: int) -> None:
         self._min_lines = min_lines
         self._min_chars = min_chars
 
-    @property
-    def step_type(self) -> StepType:
-        return StepType.PARALLEL
-
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> TaxonomyResult:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         logger.debug("index=%s", item.get("index"))
         raw_text: str = item.get("text", "")
 
@@ -85,31 +78,42 @@ class PreprocessStep(BaseStep[TaxonomyResult]):
                 f"chars={len(text)} (min {self._min_chars})"
             )
             emit(item, "removed")
-            return TaxonomyResult(skipped=1)
+            return
 
         # 7. Emit with cleaned text
         item["text"] = text
         emit(item, "kept")
-        return TaxonomyResult(success=1)
 
 
-class ConvertStep(BaseStep[TaxonomyResult]):
-    """Taxonomy schema conversion step (PARALLEL).
+class PreprocessStep(ParallelStep):
+    """Text preprocessing step (PARALLEL)."""
 
-    Builds TaxonomyDict from preprocessed item.
-    """
+    outputs = ("kept", "removed")
 
-    outputs = ("kept",)
+    def __init__(self, min_lines: int = 2, min_chars: int = 100, **_kwargs: Any) -> None:
+        self._min_lines = min_lines
+        self._min_chars = min_chars
+
+    def create_worker(self) -> PreprocessWorker:
+        return PreprocessWorker(self._min_lines, self._min_chars)
+
+
+# ---------------------------------------------------------------------------
+# PARALLEL — Convert
+# ---------------------------------------------------------------------------
+
+
+class ConvertWorker(Worker):
+    """Builds TaxonomyDict from preprocessed item."""
 
     def __init__(
         self,
-        dataset_name: str = "naver_econ_news",
-        source: str = "HanaTI/NaverNewsEconomy",
-        language: str = "korean",
-        category: str = "hass",
-        industrial_field: str = "finance",
-        template: str = "article",
-        **_kwargs: Any,
+        dataset_name: str,
+        source: str,
+        language: str,
+        category: str,
+        industrial_field: str,
+        template: str,
     ) -> None:
         self._dataset_name = dataset_name
         self._source = source
@@ -118,11 +122,7 @@ class ConvertStep(BaseStep[TaxonomyResult]):
         self._industrial_field = industrial_field
         self._template = template
 
-    @property
-    def step_type(self) -> StepType:
-        return StepType.PARALLEL
-
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> TaxonomyResult:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         logger.debug("index=%s", item.get("index"))
         try:
             index = str(item["index"])
@@ -148,17 +148,53 @@ class ConvertStep(BaseStep[TaxonomyResult]):
             }
 
             emit(taxonomy_dict, "kept")
-            return TaxonomyResult(success=1)
         except Exception:
             logger.warning(
                 "convert failed item=%s",
                 repr(item)[:200],
                 exc_info=True,
             )
-            return TaxonomyResult(errored=1)
 
 
-class DeduplicateStep(BaseStep[TaxonomyResult]):
+class ConvertStep(ParallelStep):
+    """Taxonomy schema conversion step (PARALLEL)."""
+
+    outputs = ("kept",)
+
+    def __init__(
+        self,
+        dataset_name: str = "naver_econ_news",
+        source: str = "HanaTI/NaverNewsEconomy",
+        language: str = "korean",
+        category: str = "hass",
+        industrial_field: str = "finance",
+        template: str = "article",
+        **_kwargs: Any,
+    ) -> None:
+        self._dataset_name = dataset_name
+        self._source = source
+        self._language = language
+        self._category = category
+        self._industrial_field = industrial_field
+        self._template = template
+
+    def create_worker(self) -> ConvertWorker:
+        return ConvertWorker(
+            self._dataset_name,
+            self._source,
+            self._language,
+            self._category,
+            self._industrial_field,
+            self._template,
+        )
+
+
+# ---------------------------------------------------------------------------
+# SEQUENTIAL — Deduplicate
+# ---------------------------------------------------------------------------
+
+
+class DeduplicateStep(SequentialStep):
     """Deduplication step (SEQUENTIAL).
 
     Deduplicates by id + text_hash. Same id + same text → skip.
@@ -171,11 +207,7 @@ class DeduplicateStep(BaseStep[TaxonomyResult]):
         self._seen_ids: dict[str, int] = {}
         self._id_counters: dict[str, int] = {}
 
-    @property
-    def step_type(self) -> StepType:
-        return StepType.SEQUENTIAL
-
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> TaxonomyResult:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         doc_id: str = item["id"]
         text_hash = hash(item["text"])
         logger.debug("doc_id=%s text_hash=%d", doc_id, text_hash)
@@ -184,12 +216,12 @@ class DeduplicateStep(BaseStep[TaxonomyResult]):
             # First occurrence
             self._seen_ids[doc_id] = text_hash
             emit(item, "kept")
-            return TaxonomyResult(success=1)
+            return
 
         if self._seen_ids[doc_id] == text_hash:
             # Exact duplicate — skip
             logger.debug("duplicate skipped doc_id=%s", doc_id)
-            return TaxonomyResult(skipped=1)
+            return
 
         # Same id, different text — assign suffix
         self._id_counters[doc_id] = self._id_counters.get(doc_id, 0) + 1
@@ -197,10 +229,14 @@ class DeduplicateStep(BaseStep[TaxonomyResult]):
         item["id"] = f"{doc_id}-{suffix}"
         logger.debug("renamed doc_id=%s suffix=%d", doc_id, suffix)
         emit(item, "kept")
-        return TaxonomyResult(success=1)
 
 
-class WriterStep(BaseStep[TaxonomyResult]):
+# ---------------------------------------------------------------------------
+# SEQUENTIAL — Writer (terminal)
+# ---------------------------------------------------------------------------
+
+
+class WriterStep(SequentialStep):
     """JSONL file writer step (SEQUENTIAL, terminal).
 
     Receives items from both kept and removed paths (fan-in).
@@ -214,11 +250,7 @@ class WriterStep(BaseStep[TaxonomyResult]):
         self._kept_fh: BinaryIO | None = None
         self._removed_fh: BinaryIO | None = None
 
-    @property
-    def step_type(self) -> StepType:
-        return StepType.SEQUENTIAL
-
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> TaxonomyResult:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         logger.debug("writing item id=%s", item.get("id"))
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -228,14 +260,12 @@ class WriterStep(BaseStep[TaxonomyResult]):
                 self._kept_fh = open(self._output_dir / "kept.jsonl", "wb")  # noqa: SIM115
                 logger.info("kept writer opened output=%s", self._output_dir)
             self._kept_fh.write(orjson.dumps(item, option=orjson.OPT_APPEND_NEWLINE))
-            return TaxonomyResult(success=1)
         else:
             # Removed item (raw item from preprocess)
             if self._removed_fh is None:
                 self._removed_fh = open(self._output_dir / "removed.jsonl", "wb")  # noqa: SIM115
                 logger.info("removed writer opened output=%s", self._output_dir)
             self._removed_fh.write(orjson.dumps(item, option=orjson.OPT_APPEND_NEWLINE))
-            return TaxonomyResult(skipped=1)
 
     def close(self) -> None:
         """Close the output file handles."""

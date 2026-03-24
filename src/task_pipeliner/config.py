@@ -125,7 +125,7 @@ class PipelineConfig(_WrappingModel):
 def _wrap_validation_error(e: Exception) -> ConfigValidationError:
     """Convert pydantic/yaml errors into ConfigValidationError."""
     field: str | None = None
-    if hasattr(e, "errors"):
+    if isinstance(e, ValidationError):
         errors = e.errors()
         if errors:
             loc = errors[0].get("loc", ())
@@ -141,7 +141,7 @@ def load_config(path: Path) -> PipelineConfig:
             data: Any = yaml.safe_load(f)
         if not isinstance(data, dict):
             raise ConfigValidationError("config must be a YAML mapping")
-        cfg = PipelineConfig(**data)
+        cfg = PipelineConfig(**data)    # pyright: ignore[reportUnknownArgumentType]
     except ConfigValidationError:
         raise
     except Exception as e:

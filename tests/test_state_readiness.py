@@ -1,4 +1,4 @@
-"""Tests: is_ready gating + set_step_state dispatch + engine wiring."""
+"""Tests: is_ready gating + get_output_state dispatch + engine wiring."""
 
 from __future__ import annotations
 
@@ -12,17 +12,19 @@ from dummy_steps import (
     CollectorStep,
     DummySourceStep,
     PassthroughStep,
+    SequentialPassthroughStep,
     StateGatedStep,
     TerminalStep,
 )
 
 from task_pipeliner.config import ExecutionConfig, PipelineConfig, StepConfig
-from task_pipeliner.engine import PipelineEngine, StepRegistry
+from task_pipeliner.engine import PipelineEngine
+from task_pipeliner.pipeline import StepRegistry
 from task_pipeliner.producers import Sentinel, SequentialProducer
 from task_pipeliner.stats import StatsCollector
 
 # ---------------------------------------------------------------------------
-# BaseStep.is_ready
+# StepBase.is_ready
 # ---------------------------------------------------------------------------
 
 
@@ -42,40 +44,25 @@ class TestIsReady:
 
 
 # ---------------------------------------------------------------------------
-# BaseStep.set_step_state
+# StepBase.get_output_state
 # ---------------------------------------------------------------------------
 
 
-class TestSetStepState:
-    def test_raises_outside_pipeline(self) -> None:
+class TestGetOutputState:
+    def test_default_returns_none(self) -> None:
         step = PassthroughStep()
-        with pytest.raises(RuntimeError, match="not available outside pipeline"):
-            step.set_step_state("SomeStep", {"data": 1})
+        assert step.get_output_state() is None
 
-    def test_dispatches_via_callback(self) -> None:
-        step = PassthroughStep()
-        calls: list[tuple[str, Any]] = []
-        step._state_dispatch = lambda target, state: calls.append((target, state))
-
-        step.set_step_state("TargetStep", {"freq": {1: 3}})
-
-        assert len(calls) == 1
-        assert calls[0] == ("TargetStep", {"freq": {1: 3}})
-
-    def test_collector_calls_set_step_state_on_close(self) -> None:
+    def test_collector_returns_output_state_after_processing(self) -> None:
         step = CollectorStep(target_step="MyFilter")
-        calls: list[tuple[str, Any]] = []
-        step._state_dispatch = lambda target, state: calls.append((target, state))
 
         # Simulate processing
         state = step.initial_state
         step.process(1, state, lambda item, tag: None)
         step.process(2, state, lambda item, tag: None)
-        step.close()
 
-        assert len(calls) == 1
-        assert calls[0][0] == "MyFilter"
-        assert calls[0][1] == [1, 2]
+        result = step.get_output_state()
+        assert result == {"MyFilter": [1, 2]}
 
 
 # ---------------------------------------------------------------------------
@@ -101,10 +88,10 @@ class TestProducerStateGating:
 
         producer = SequentialProducer(
             step=StateGatedStep(),
+            step_name="StateGatedStep",
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-
             state=None,  # is_ready returns False
             state_changed_event=state_changed,
         )
@@ -136,17 +123,17 @@ class TestProducerStateGating:
         out_q: multiprocessing.Queue[Any] = ctx.Queue()
 
         stats = StatsCollector()
-        stats.register("PassthroughStep")
+        stats.register("SequentialPassthroughStep")
 
         in_q.put(99)
         in_q.put(Sentinel())
 
         producer = SequentialProducer(
-            step=PassthroughStep(),
+            step=SequentialPassthroughStep(),
+            step_name="SequentialPassthroughStep",
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-
         )
 
         t = threading.Thread(target=producer.run)
@@ -187,7 +174,7 @@ class TestEngineStateDispatch:
     def test_collector_sets_state_for_gated_step(self, tmp_path: Path) -> None:
         """
         Source → fan-out [CollectorStep (terminal), StateGatedStep]
-        CollectorStep close() calls set_step_state → StateGatedStep unblocks.
+        CollectorStep get_output_state() → Producer dispatches → StateGatedStep unblocks.
         """
         engine, stats = self._make_engine(
             [

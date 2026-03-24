@@ -12,15 +12,13 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_LOG_FORMAT = "%(asctime)s %(levelname)-5s %(name)s:%(funcName)s:%(lineno)d %(message)s"
-
 
 @dataclass
 class StepStats:
     step_name: str
     processed: int = 0
     errored: int = 0
-    emitted: dict[str, int] = field(default_factory=dict)
+    emitted: dict[str, int] = field(default_factory=dict[str,int])
     _start_time: float = field(default_factory=time.monotonic)
     _end_time: float | None = None
     first_item_at: float | None = None
@@ -71,7 +69,6 @@ class StatsCollector:
     def __init__(self) -> None:
         self._stats: dict[str, StepStats] = {}
         self._lock = threading.Lock()
-        self._handler: logging.FileHandler | None = None
         self.total_items: int = 0
 
     def register(self, step_name: str) -> StepStats:
@@ -117,16 +114,8 @@ class StatsCollector:
     def finish(self, step_name: str) -> None:
         self._stats[step_name].finish()
 
-    def setup_log_handler(self, path: Path) -> None:
-        logger.debug("path=%s", path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        handler = logging.FileHandler(str(path), encoding="utf-8")
-        handler.setFormatter(logging.Formatter(_LOG_FORMAT))
-        parent_logger = logging.getLogger("task_pipeliner")
-        parent_logger.addHandler(handler)
-        parent_logger.setLevel(logging.DEBUG)
-        self._handler = handler
-        logger.debug("log handler attached to task_pipeliner logger")
+    def get_step_stats(self, step_name: str) -> StepStats | None:
+        return self._stats.get(step_name)
 
     def write_json(self, path: Path) -> None:
         logger.debug("path=%s", path)
@@ -141,9 +130,4 @@ class StatsCollector:
             logger.warning("failed to write stats JSON to %s", path, exc_info=True)
 
     def flush(self) -> None:
-        if self._handler is not None:
-            self._handler.flush()
-            parent_logger = logging.getLogger("task_pipeliner")
-            parent_logger.removeHandler(self._handler)
-            self._handler.close()
-            self._handler = None
+        pass

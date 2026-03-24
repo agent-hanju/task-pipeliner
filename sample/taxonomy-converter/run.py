@@ -7,9 +7,8 @@ from pathlib import Path
 
 from steps import ConvertStep, DeduplicateStep, LoaderStep, PreprocessStep, WriterStep
 
+from task_pipeliner import Pipeline
 from task_pipeliner.config import StepConfig, load_config
-from task_pipeliner.engine import PipelineEngine, StepRegistry
-from task_pipeliner.stats import StatsCollector
 
 logger = logging.getLogger(__name__)
 
@@ -54,22 +53,15 @@ def main(
                 **{k: v for k, v in extra.items() if k != "dir"},
             )
 
-    registry = StepRegistry()
-    registry.register("loader", LoaderStep)
-    registry.register("preprocess", PreprocessStep)
-    registry.register("convert", ConvertStep)
-    registry.register("deduplicate", DeduplicateStep)
-    registry.register("writer", WriterStep)
-
-    stats = StatsCollector()
-    stats.setup_log_handler(output_dir / "pipeline.log")
-
-    try:
-        engine = PipelineEngine(config=cfg, registry=registry, stats=stats)
-        engine.run(output_dir=output_dir)
-        logger.info("pipeline run completed config=%s", config_path)
-    finally:
-        stats.flush()
+    pipeline = Pipeline()
+    pipeline.register_all({
+        "loader": LoaderStep,
+        "preprocess": PreprocessStep,
+        "convert": ConvertStep,
+        "deduplicate": DeduplicateStep,
+        "writer": WriterStep,
+    })
+    pipeline.run(config=cfg, output_dir=output_dir)
 
 
 if __name__ == "__main__":

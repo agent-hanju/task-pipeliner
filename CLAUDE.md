@@ -66,25 +66,50 @@ When working under the `sample/` directory, follow each sample project's own `CL
 - Use `@pytest.mark.parametrize` for multiple input scenarios.
 - Apply `@pytest.mark.timeout` to all Queue/sentinel tests to detect deadlocks.
 
+## Step Hierarchy
+
+Three ABC base classes replace the old monolithic `BaseStep`:
+
+- `SourceStep` — implements `items()` to yield input data
+- `SequentialStep` — implements `process(item, state, emit)` for single-thread stateful work
+- `ParallelStep` — implements `create_worker() -> Worker` for multi-process CPU-bound work
+
+`Worker` is a separate ABC whose instances are pickled and sent to worker processes.
+
 ## Step Lifecycle
 
+**SequentialStep:**
 ```
 __init__(config) → [is_ready() gating] → open() → process() × N → close()
 ```
 
-- `__init__`: Config injection only. Do NOT acquire runtime resources (file handles, connections) here.
-- `open()`: Called once, right before the first `process()` call (after `is_ready()` passes). Use for runtime resource acquisition (open files, create temp dirs, establish connections).
-- `process()`: Called per item. Core processing logic.
-- `close()`: Called once after all items are processed (in `finally` block — guaranteed). Release resources acquired in `open()`.
+**ParallelStep:**
+```
+Main process:                      Worker process N:
+step.__init__(config)
+worker = step.create_worker()
+pickle.dumps(worker)
+[is_ready() gating]
+step.open()
+                                   worker = pickle.loads(...)
+                                   worker.open()
+                                   worker.process() × N
+                                   worker.close()
+step.close()
+```
 
-**PARALLEL step caveat:** `open()` and `close()` run on the **main-process instance** only. Worker processes receive pickle-restored copies and do NOT call `open()`. If workers need per-process resources (DB connections, model loading), use lazy initialisation inside `process()`.
+- `__init__`: Config injection only. Do NOT acquire runtime resources (file handles, connections) here.
+- `open()` / `close()`: Main-process lifecycle. Acquire/release resources (files, connections, temp dirs).
+- `Worker.open()` / `Worker.close()`: Per-worker-process lifecycle. Use for per-process resources (DB connections, model loading, GPU context).
+- `create_worker()`: Called before `step.open()` so the Worker doesn't capture unpicklable main-process resources.
 
 ## Pickle Rule
 
 All objects passed across processes must be picklable (spawn mode requirement).
-- Define all classes and functions at module level (no lambdas, closures, or inner classes)
+- Define all Step, Worker, and utility classes/functions at module level (no lambdas, closures, or inner classes)
 - `functools.partial` is allowed when wrapping module-level functions
 - The engine validates picklability eagerly when registering a new Step class
+- For `ParallelStep`: the `Worker` returned by `create_worker()` must be picklable. The `ParallelStep` itself is never pickled.
 
 ## Logging Strategy
 

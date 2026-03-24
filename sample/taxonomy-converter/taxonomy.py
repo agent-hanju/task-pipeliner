@@ -9,8 +9,6 @@ from typing import Self, TypedDict
 
 import orjson
 
-from task_pipeliner import BaseResult
-
 logger = logging.getLogger(__name__)
 
 
@@ -48,7 +46,7 @@ class SimpleTaxonomyDict(TypedDict):
 
 
 @dataclass
-class TaxonomyResult(BaseResult):
+class TaxonomyResult:
     """Tracks conversion results: success/skipped/error counts."""
 
     success: int = 0

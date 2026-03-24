@@ -198,8 +198,8 @@ class TestEndToEnd:
         results = _read_jsonl(output_dir / "kept.jsonl")
         assert len(results) == 3
 
-    def test_count_summary_written(self, tmp_path: Path) -> None:
-        """count_summary.json is created by TaxonomyResult.write()."""
+    def test_stats_json_written(self, tmp_path: Path) -> None:
+        """stats.json is written by StatsCollector after pipeline run."""
         input_dir = tmp_path / "input"
         input_dir.mkdir()
         output_dir = tmp_path / "output"
@@ -210,8 +210,8 @@ class TestEndToEnd:
         )
         main([input_dir], output_dir)
 
-        summary_path = output_dir / "count_summary.json"
-        assert summary_path.exists()
-        data = json.loads(summary_path.read_text())
-        assert "success" in data
-        assert "total" in data
+        stats_path = output_dir / "stats.json"
+        assert stats_path.exists()
+        data = json.loads(stats_path.read_text())
+        assert isinstance(data, list)
+        assert len(data) > 0

@@ -18,9 +18,8 @@ from dedup.normalize import normalize_for_dedup
 from filters.length import filter_length
 from filters.pii import filter_pii
 from filters.repetition import filter_repetition
-from result import FilterResult
 
-from task_pipeliner.base import BaseResult, BaseStep, StepType
+from task_pipeliner import ParallelStep, SequentialStep, SourceStep, Worker
 
 logger = logging.getLogger(__name__)
 
@@ -30,27 +29,13 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-class _NullResult(BaseResult):
-    """Minimal no-op result for LoaderStep."""
-
-    def merge(self, other: _NullResult) -> _NullResult:
-        return self
-
-    def write(self, output_dir: Path, step_name: str = "") -> None:
-        pass
-
-
-class LoaderStep(BaseStep[_NullResult]):
+class LoaderStep(SourceStep):
     """SOURCE step that reads JSONL files."""
 
     outputs: ClassVar[tuple[str, ...]] = ("main",)
 
     def __init__(self, paths: list[str] | None = None, **_kwargs: Any) -> None:
         self._paths = [Path(p) for p in paths] if paths else []
-
-    @property
-    def step_type(self) -> StepType:
-        return StepType.SOURCE
 
     def items(self) -> Generator[Any, None, None]:
         logger.info("loading from %d paths", len(self._paths))
@@ -63,9 +48,6 @@ class LoaderStep(BaseStep[_NullResult]):
                         stripped = line.strip()
                         if stripped:
                             yield orjson.loads(stripped)
-
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> _NullResult:
-        raise NotImplementedError("SOURCE step does not process items")
 
 
 # ---------------------------------------------------------------------------
@@ -84,34 +66,18 @@ _FILTER_REGISTRY: dict[str, Callable[..., tuple[bool, str]]] = {
 # ---------------------------------------------------------------------------
 
 
-class QualityFilterStep(BaseStep[FilterResult]):
-    """PARALLEL step — applies quality filters to each item."""
-
-    outputs: ClassVar[tuple[str, ...]] = ("kept", "removed")
+class QualityFilterWorker(Worker):
+    """Applies quality filters to each item."""
 
     def __init__(
         self,
-        text_key: str = "text",
-        filters: dict[str, dict[str, Any]] | None = None,
-        **_kwargs: Any,
+        text_key: str,
+        filters: dict[str, dict[str, Any]],
     ) -> None:
         self._text_key = text_key
-        # Default: all filters enabled with defaults
-        self._filters = (
-            filters
-            if filters is not None
-            else {
-                "length": {},
-                "repetition": {},
-                "pii": {},
-            }
-        )
+        self._filters = filters
 
-    @property
-    def step_type(self) -> StepType:
-        return StepType.PARALLEL
-
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> FilterResult:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         logger.debug("text_key=%s filters=%s", self._text_key, list(self._filters))
         text = item.get(self._text_key, "")
 
@@ -127,11 +93,36 @@ class QualityFilterStep(BaseStep[FilterResult]):
                 item["_removed_reason"] = full_reason
                 emit(item, "removed")
                 logger.debug("removed reason=%s id=%s", full_reason, item.get("id"))
-                return FilterResult(removed=1, removed_reasons={full_reason: 1})
+                return
 
         emit(item, "kept")
         logger.debug("kept id=%s", item.get("id"))
-        return FilterResult(kept=1)
+
+
+class QualityFilterStep(ParallelStep):
+    """PARALLEL step — applies quality filters to each item."""
+
+    outputs: ClassVar[tuple[str, ...]] = ("kept", "removed")
+
+    def __init__(
+        self,
+        text_key: str = "text",
+        filters: dict[str, dict[str, Any]] | None = None,
+        **_kwargs: Any,
+    ) -> None:
+        self._text_key = text_key
+        self._filters = (
+            filters
+            if filters is not None
+            else {
+                "length": {},
+                "repetition": {},
+                "pii": {},
+            }
+        )
+
+    def create_worker(self) -> QualityFilterWorker:
+        return QualityFilterWorker(self._text_key, self._filters)
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +130,23 @@ class QualityFilterStep(BaseStep[FilterResult]):
 # ---------------------------------------------------------------------------
 
 
-class HashComputeStep(BaseStep[FilterResult]):
+class HashComputeWorker(Worker):
+    """Pre-computes SHA hash for exact dedup."""
+
+    def __init__(self, text_key: str, hash_algo: str) -> None:
+        self._text_key = text_key
+        self._hash_algo = hash_algo
+
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
+        logger.debug("hash_algo=%s", self._hash_algo)
+        text = item.get(self._text_key, "")
+        normalized = normalize_for_dedup(text)
+        hash_value = hashlib.new(self._hash_algo, normalized.encode("utf-8")).hexdigest()
+        item["_dedup_hash"] = hash_value
+        emit(item, "main")
+
+
+class HashComputeStep(ParallelStep):
     """PARALLEL step — pre-computes SHA hash for exact dedup."""
 
     outputs: ClassVar[tuple[str, ...]] = ("main",)
@@ -153,18 +160,8 @@ class HashComputeStep(BaseStep[FilterResult]):
         self._text_key = text_key
         self._hash_algo = hash_algo
 
-    @property
-    def step_type(self) -> StepType:
-        return StepType.PARALLEL
-
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> FilterResult:
-        logger.debug("hash_algo=%s", self._hash_algo)
-        text = item.get(self._text_key, "")
-        normalized = normalize_for_dedup(text)
-        hash_value = hashlib.new(self._hash_algo, normalized.encode("utf-8")).hexdigest()
-        item["_dedup_hash"] = hash_value
-        emit(item, "main")
-        return FilterResult(kept=1)
+    def create_worker(self) -> HashComputeWorker:
+        return HashComputeWorker(self._text_key, self._hash_algo)
 
 
 # ---------------------------------------------------------------------------
@@ -172,14 +169,10 @@ class HashComputeStep(BaseStep[FilterResult]):
 # ---------------------------------------------------------------------------
 
 
-class HashLookupStep(BaseStep[FilterResult]):
+class HashLookupStep(SequentialStep):
     """SEQUENTIAL step — hash set lookup/insert (stateful)."""
 
     outputs: ClassVar[tuple[str, ...]] = ("kept", "removed")
-
-    @property
-    def step_type(self) -> StepType:
-        return StepType.SEQUENTIAL
 
     @property
     def initial_state(self) -> set[str]:
@@ -187,19 +180,18 @@ class HashLookupStep(BaseStep[FilterResult]):
 
     def process(
         self, item: Any, state: set[str], emit: Callable[[Any, str], None]
-    ) -> FilterResult:
+    ) -> None:
         hash_value: str = item["_dedup_hash"]
         logger.debug("hash=%s", hash_value[:16])
 
         if hash_value in state:
             item["_removed_reason"] = "dedup/exact"
             emit(item, "removed")
-            return FilterResult(removed=1, removed_reasons={"dedup/exact": 1})
+            return
 
         state.add(hash_value)
         del item["_dedup_hash"]
         emit(item, "kept")
-        return FilterResult(kept=1)
 
 
 # ---------------------------------------------------------------------------
@@ -207,27 +199,15 @@ class HashLookupStep(BaseStep[FilterResult]):
 # ---------------------------------------------------------------------------
 
 
-class MinHashComputeStep(BaseStep[FilterResult]):
-    """PARALLEL step — pre-computes MinHash signatures."""
+class MinHashComputeWorker(Worker):
+    """Pre-computes MinHash signatures."""
 
-    outputs: ClassVar[tuple[str, ...]] = ("main",)
-
-    def __init__(
-        self,
-        text_key: str = "text",
-        num_perm: int = 128,
-        ngram_size: int = 5,
-        **_kwargs: Any,
-    ) -> None:
+    def __init__(self, text_key: str, num_perm: int, ngram_size: int) -> None:
         self._text_key = text_key
         self._num_perm = num_perm
         self._ngram_size = ngram_size
 
-    @property
-    def step_type(self) -> StepType:
-        return StepType.PARALLEL
-
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> FilterResult:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         logger.debug("num_perm=%d ngram_size=%d", self._num_perm, self._ngram_size)
         text = item.get(self._text_key, "")
         normalized = normalize_for_dedup(text)
@@ -249,7 +229,26 @@ class MinHashComputeStep(BaseStep[FilterResult]):
 
         item["_minhash"] = mh
         emit(item, "main")
-        return FilterResult(kept=1)
+
+
+class MinHashComputeStep(ParallelStep):
+    """PARALLEL step — pre-computes MinHash signatures."""
+
+    outputs: ClassVar[tuple[str, ...]] = ("main",)
+
+    def __init__(
+        self,
+        text_key: str = "text",
+        num_perm: int = 128,
+        ngram_size: int = 5,
+        **_kwargs: Any,
+    ) -> None:
+        self._text_key = text_key
+        self._num_perm = num_perm
+        self._ngram_size = ngram_size
+
+    def create_worker(self) -> MinHashComputeWorker:
+        return MinHashComputeWorker(self._text_key, self._num_perm, self._ngram_size)
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +256,7 @@ class MinHashComputeStep(BaseStep[FilterResult]):
 # ---------------------------------------------------------------------------
 
 
-class MinHashLookupStep(BaseStep[FilterResult]):
+class MinHashLookupStep(SequentialStep):
     """SEQUENTIAL step — LSH index lookup/insert (stateful)."""
 
     outputs: ClassVar[tuple[str, ...]] = ("kept", "removed")
@@ -273,16 +272,12 @@ class MinHashLookupStep(BaseStep[FilterResult]):
         self._lsh = MinHashLSH(threshold=threshold, num_perm=num_perm)
         self._counter = 0
 
-    @property
-    def step_type(self) -> StepType:
-        return StepType.SEQUENTIAL
-
     def process(
         self,
         item: Any,
         state: Any,
         emit: Callable[[Any, str], None],
-    ) -> FilterResult:
+    ) -> None:
         mh: MinHash = item["_minhash"]
         logger.debug("counter=%d", self._counter)
 
@@ -291,13 +286,12 @@ class MinHashLookupStep(BaseStep[FilterResult]):
             item["_removed_reason"] = "dedup/minhash"
             del item["_minhash"]
             emit(item, "removed")
-            return FilterResult(removed=1, removed_reasons={"dedup/minhash": 1})
+            return
 
         self._counter += 1
         self._lsh.insert(str(self._counter), mh)
         del item["_minhash"]
         emit(item, "kept")
-        return FilterResult(kept=1)
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +299,7 @@ class MinHashLookupStep(BaseStep[FilterResult]):
 # ---------------------------------------------------------------------------
 
 
-class WriterStep(BaseStep[FilterResult]):
+class WriterStep(SequentialStep):
     """SEQUENTIAL terminal step — writes kept/removed JSONL files."""
 
     outputs: ClassVar[tuple[str, ...]] = ()
@@ -315,11 +309,7 @@ class WriterStep(BaseStep[FilterResult]):
         self._kept_fh: BinaryIO | None = None
         self._removed_fh: BinaryIO | None = None
 
-    @property
-    def step_type(self) -> StepType:
-        return StepType.SEQUENTIAL
-
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> FilterResult:
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
         if "_removed_reason" in item:
@@ -328,14 +318,12 @@ class WriterStep(BaseStep[FilterResult]):
                 logger.info("removed writer opened output=%s", self._output_dir)
             line = json.dumps(item, ensure_ascii=False) + "\n"
             self._removed_fh.write(line.encode("utf-8"))
-            return FilterResult(removed=1)
         else:
             if self._kept_fh is None:
                 self._kept_fh = open(self._output_dir / "kept.jsonl", "wb")
                 logger.info("kept writer opened output=%s", self._output_dir)
             line = json.dumps(item, ensure_ascii=False) + "\n"
             self._kept_fh.write(line.encode("utf-8"))
-            return FilterResult(kept=1)
 
     def close(self) -> None:
         """Release file handles."""
