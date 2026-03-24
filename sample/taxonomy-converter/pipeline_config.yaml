@@ -1,7 +1,7 @@
 pipeline:
   - type: loader
     paths:
-      - ./data
+      - ${input_dir}
     outputs:
       main: preprocess
   - type: preprocess
@@ -23,7 +23,7 @@ pipeline:
     outputs:
       kept: writer
   - type: writer
-    dir: ./output
+    dir: ${output_dir}
     format: jsonl
 
 execution:

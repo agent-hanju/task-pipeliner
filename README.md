@@ -135,12 +135,6 @@ pipeline.register_all({
 pipeline.run(config=Path("pipeline_config.yaml"), output_dir=Path("./output"))
 ```
 
-Or via CLI:
-
-```bash
-task-pipeliner run --config pipeline_config.yaml --output ./output
-```
-
 ## Core Concepts
 
 ### Step Hierarchy
@@ -220,7 +214,7 @@ High-level facade:
 pipeline = Pipeline()
 pipeline.register("step_name", StepClass)     # register one
 pipeline.register_all({"name": Class, ...})    # register many
-pipeline.run(config=path_or_config, output_dir=path)
+pipeline.run(config=path_or_config, output_dir=path, variables={"key": "val"})
 ```
 
 ## Configuration
@@ -244,6 +238,72 @@ execution:
   queue_size: 0               # Reserved for future disk-spill (0 = unbounded)
   chunk_size: 100             # Items per batch for parallel workers
 ```
+
+### Variable Substitution
+
+Config values can use `${var}` placeholders, which are substituted at load time via `variables` parameter:
+
+```yaml
+# pipeline_config.yaml
+pipeline:
+  - type: loader
+    paths:
+      - ${input_dir}
+    outputs:
+      main: filter
+
+  - type: filter
+    min_length: 10
+    outputs:
+      kept: writer
+
+  - type: writer
+    output_path: ${output_dir}/result.jsonl
+
+execution:
+  workers: 4
+```
+
+```python
+# run.py
+import sys
+from pathlib import Path
+from task_pipeliner import Pipeline
+from steps import LoaderStep, FilterStep, WriterStep
+
+input_dir = sys.argv[1]
+output_dir = sys.argv[2]
+
+pipeline = Pipeline()
+pipeline.register_all({
+    "loader": LoaderStep,
+    "filter": FilterStep,
+    "writer": WriterStep,
+})
+pipeline.run(
+    config=Path("pipeline_config.yaml"),
+    output_dir=Path(output_dir),
+    variables={"input_dir": input_dir, "output_dir": output_dir},
+)
+```
+
+```bash
+python run.py ./data ./output
+```
+
+**Type-preserving substitution** — YAML parse 후 dict tree를 순회하며 `${var}`를 치환합니다:
+
+| YAML 값 | 변수 값 | 치환 결과 | 결과 타입 |
+|----------|---------|-----------|-----------|
+| `${input_dir}` | `"/data"` | `"/data"` | `str` |
+| `${paths}` | `["/a.jsonl", "/b.jsonl"]` | `["/a.jsonl", "/b.jsonl"]` | `list` |
+| `${threshold}` | `42` | `42` | `int` |
+| `${output_dir}/result.jsonl` | `"/out"` | `"/out/result.jsonl"` | `str` |
+
+- 값 전체가 `${var}`인 경우 → 변수 값을 그대로 대입 (list, dict, int 등 모든 타입)
+- 문자열 내부에 `${var}`가 포함된 경우 → `str()` 변환 후 문자열 치환
+- `variables` 제공 시 미해결 `${var}` → `ConfigValidationError` 발생
+- `variables` 미제공 시 `${...}`는 일반 문자열로 처리 (하위 호환)
 
 ### Config Rules
 
@@ -377,27 +437,6 @@ After completion, `stats.json` in the output directory contains per-step metrics
 ]
 ```
 
-## CLI Usage
-
-```bash
-# Run a single pipeline
-task-pipeliner run --config pipeline.yaml --output ./output [--workers 8]
-
-# Run multiple jobs from a JSON array file
-task-pipeliner batch jobs.json
-```
-
-**Jobs file format**:
-
-```json
-[
-  {"config": "config1.yaml", "output_dir": "./out1"},
-  {"config": "config2.yaml", "output_dir": "./out2"}
-]
-```
-
-> Note: The CLI creates a bare `Pipeline()` with no steps registered. For custom steps, use the programmatic API in your project's `run.py`.
-
 ## Creating Your Own Pipeline
 
 ### Step-by-step
@@ -437,7 +476,7 @@ task-pipeliner batch jobs.json
 | `PipelineConfig` | `task_pipeliner.config` | Pydantic model for pipeline config |
 | `StepConfig` | `task_pipeliner.config` | Pydantic model for step config |
 | `ExecutionConfig` | `task_pipeliner.config` | Pydantic model for execution settings |
-| `load_config(path)` | `task_pipeliner.config` | Load and validate YAML config |
+| `load_config(path, variables)` | `task_pipeliner.config` | Load YAML config with optional `${var}` substitution |
 
 ## Changelog
 

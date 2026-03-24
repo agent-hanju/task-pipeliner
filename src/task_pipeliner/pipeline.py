@@ -6,6 +6,7 @@ import logging
 import pickle
 import time
 from pathlib import Path
+from typing import Any
 
 from task_pipeliner.config import PipelineConfig, load_config
 from task_pipeliner.engine import PipelineEngine
@@ -98,12 +99,20 @@ class Pipeline:
         *,
         config: Path | PipelineConfig,
         output_dir: Path,
+        variables: dict[str, Any] | None = None,
     ) -> None:
-        """Load config (if path) and run the pipeline."""
-        logger.debug("config=%s output_dir=%s", config, output_dir)
+        """Load config (if path) and run the pipeline.
+
+        Parameters
+        ----------
+        variables:
+            Optional variable overrides for ``${var}`` interpolation.
+            Only used when *config* is a Path (YAML loading).
+        """
+        logger.debug("config=%s output_dir=%s variables=%s", config, output_dir, variables)
 
         if isinstance(config, Path):
-            cfg = load_config(config)
+            cfg = load_config(config, variables=variables)
         else:
             cfg = config
 

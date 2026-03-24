@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -122,6 +123,50 @@ class PipelineConfig(_WrappingModel):
         return self
 
 
+_VAR_PATTERN = re.compile(r"\$\{(\w+)\}")
+
+
+def _resolve_variables(obj: Any, variables: dict[str, Any]) -> Any:
+    """Recursively resolve ``${var}`` placeholders in a parsed YAML tree.
+
+    - If a string value is exactly ``${var}``, replace with the variable as-is
+      (supports lists, dicts, numbers, etc.).
+    - If ``${var}`` appears within a larger string, do string substitution
+      (variable value must be stringable).
+    - Raise ``ConfigValidationError`` for unresolved references.
+    """
+    if isinstance(obj, str):
+        # Exact match: entire value is ${var} → replace with any type
+        m = _VAR_PATTERN.fullmatch(obj)
+        if m:
+            name = m.group(1)
+            if name not in variables:
+                raise ConfigValidationError(
+                    f"unresolved variable: ${{{name}}}", field=name
+                )
+            return variables[name]
+
+        # Partial match: ${var} embedded in a string → string substitution
+        def _replacer(match: re.Match[str]) -> str:
+            name = match.group(1)
+            if name not in variables:
+                raise ConfigValidationError(
+                    f"unresolved variable: ${{{name}}}", field=name
+                )
+            return str(variables[name])
+
+        result = _VAR_PATTERN.sub(_replacer, obj)
+        return result if result != obj else obj
+
+    if isinstance(obj, dict):
+        return {k: _resolve_variables(v, variables) for k, v in obj.items()}
+
+    if isinstance(obj, list):
+        return [_resolve_variables(item, variables) for item in obj]
+
+    return obj
+
+
 def _wrap_validation_error(e: Exception) -> ConfigValidationError:
     """Convert pydantic/yaml errors into ConfigValidationError."""
     field: str | None = None
@@ -133,14 +178,32 @@ def _wrap_validation_error(e: Exception) -> ConfigValidationError:
     return ConfigValidationError(str(e), field=field, cause=e)
 
 
-def load_config(path: Path) -> PipelineConfig:
-    """Load a YAML config file and return a validated PipelineConfig."""
-    logger.debug("path=%s", path)
+def load_config(
+    path: Path,
+    variables: dict[str, Any] | None = None,
+) -> PipelineConfig:
+    """Load a YAML config file and return a validated PipelineConfig.
+
+    Parameters
+    ----------
+    path:
+        Path to the YAML config file.
+    variables:
+        Optional variable overrides for ``${var}`` substitution in the config.
+        If the entire YAML value is ``${var}``, the variable replaces it as-is
+        (supports lists, dicts, numbers). If ``${var}`` appears within a string,
+        it is substituted as a string.
+    """
+    logger.debug("path=%s variables=%s", path, variables)
     try:
         with open(path, encoding="utf-8") as f:
             data: Any = yaml.safe_load(f)
         if not isinstance(data, dict):
             raise ConfigValidationError("config must be a YAML mapping")
+
+        if variables:
+            data = _resolve_variables(data, variables)
+
         cfg = PipelineConfig(**data)    # pyright: ignore[reportUnknownArgumentType]
     except ConfigValidationError:
         raise

@@ -5,7 +5,7 @@
 pipeline:
   - type: loader
     paths:
-      - ./data
+      - ${input_dir}
     outputs:
       main: quality_filter
 
@@ -47,6 +47,7 @@ pipeline:
       removed: writer
 
   - type: writer
+    output_dir: ${output_dir}
     # Terminal step — no outputs
 
 execution:

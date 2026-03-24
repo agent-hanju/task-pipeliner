@@ -33,14 +33,16 @@ def test_pipeline_produces_output(tmp_path: Path) -> None:
     """Basic pipeline run: normal + short item → kept + removed files."""
     from run import main
 
-    input_path = _write_jsonl(
-        tmp_path / "input.jsonl",
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    _write_jsonl(
+        input_dir / "input.jsonl",
         [SAMPLE_NORMAL_ITEM, SAMPLE_SHORT_ITEM],
     )
     output_dir = tmp_path / "output"
 
     main(
-        input_paths=[input_path],
+        input_dir=input_dir,
         output_dir=output_dir,
         no_minhash=False,
     )
@@ -67,11 +69,13 @@ def test_pipeline_no_minhash(tmp_path: Path) -> None:
     from run import main
 
     items = [{"id": f"doc_{i}", "text": NORMAL_TEXT + f" variation {i}"} for i in range(3)]
-    input_path = _write_jsonl(tmp_path / "input.jsonl", items)
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    _write_jsonl(input_dir / "input.jsonl", items)
     output_dir = tmp_path / "output"
 
     main(
-        input_paths=[input_path],
+        input_dir=input_dir,
         output_dir=output_dir,
         no_minhash=True,
     )

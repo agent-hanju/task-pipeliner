@@ -67,7 +67,7 @@ class TestEndToEnd:
         items = [_make_article(i) for i in range(3)]
         _write_json_input(input_dir / "20240301_news.json", items)
 
-        main([input_dir], output_dir)
+        main(input_dir, output_dir)
 
         kept = output_dir / "kept.jsonl"
         assert kept.exists()
@@ -81,7 +81,7 @@ class TestEndToEnd:
         output_dir = tmp_path / "output"
 
         _write_json_input(input_dir / "20240301_test.json", [_make_article(1)])
-        main([input_dir], output_dir)
+        main(input_dir, output_dir)
 
         results = _read_jsonl(output_dir / "kept.jsonl")
         assert len(results) == 1
@@ -124,7 +124,7 @@ class TestEndToEnd:
         article = _make_article(1)
         _write_json_input(input_dir / "20240301_dup.json", [article, article])
 
-        main([input_dir], output_dir)
+        main(input_dir, output_dir)
 
         results = _read_jsonl(output_dir / "kept.jsonl")
         assert len(results) == 1
@@ -145,7 +145,7 @@ class TestEndToEnd:
         normal = _make_article(2)
         _write_json_input(input_dir / "20240301_mix.json", [short, normal])
 
-        main([input_dir], output_dir)
+        main(input_dir, output_dir)
 
         kept = _read_jsonl(output_dir / "kept.jsonl")
         assert len(kept) == 1
@@ -159,7 +159,7 @@ class TestEndToEnd:
         output_dir = tmp_path / "output"
 
         _write_json_input(input_dir / "20240301_stats.json", [_make_article(1)])
-        main([input_dir], output_dir)
+        main(input_dir, output_dir)
 
         stats_path = output_dir / "stats.json"
         assert stats_path.exists()
@@ -176,7 +176,7 @@ class TestEndToEnd:
         _write_json_input(input_dir / "20240301_a.json", [_make_article(1)])
         _write_json_input(input_dir / "20240302_b.json", [_make_article(2)])
 
-        main([input_dir], output_dir)
+        main(input_dir, output_dir)
 
         results = _read_jsonl(output_dir / "kept.jsonl")
         assert len(results) == 2
@@ -193,7 +193,7 @@ class TestEndToEnd:
             [_make_article(2), _make_article(3)],
         )
 
-        main([input_dir], output_dir)
+        main(input_dir, output_dir)
 
         results = _read_jsonl(output_dir / "kept.jsonl")
         assert len(results) == 3
@@ -208,7 +208,7 @@ class TestEndToEnd:
             input_dir / "20240301_count.json",
             [_make_article(1), _make_article(2)],
         )
-        main([input_dir], output_dir)
+        main(input_dir, output_dir)
 
         stats_path = output_dir / "stats.json"
         assert stats_path.exists()

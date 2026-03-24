@@ -1,4 +1,4 @@
-"""Tests: pipeline.py + cli.py — W-15."""
+"""Tests: pipeline.py — W-15."""
 
 from __future__ import annotations
 
@@ -7,10 +7,8 @@ from pathlib import Path
 import orjson
 import pytest
 import yaml
-from click.testing import CliRunner
 from dummy_steps import DummyJsonlSourceStep, FilterEvenStep, PassthroughStep
 
-from task_pipeliner.cli import main
 from task_pipeliner.exceptions import StepRegistrationError
 from task_pipeliner.pipeline import Pipeline
 
@@ -107,155 +105,3 @@ class TestPipeline:
         p = Pipeline()
         with pytest.raises(StepRegistrationError):
             p.run(config=config, output_dir=output_dir)
-
-
-# ---------------------------------------------------------------------------
-# CLI (CliRunner)
-# ---------------------------------------------------------------------------
-
-
-class TestRunCommand:
-    @staticmethod
-    def _pipeline_obj() -> dict[str, Pipeline]:
-        p = Pipeline()
-        p.register("source", DummyJsonlSourceStep)
-        p.register("passthrough", PassthroughStep)
-        p.register("filter_even", FilterEvenStep)
-        return {"pipeline": p}
-
-    @pytest.mark.timeout(30)
-    def test_run_end_to_end(self, tmp_path: Path) -> None:
-        """run command → exit_code 0, stats.json exists."""
-        input_file = tmp_path / "input.jsonl"
-        input_file.write_bytes(b"\n".join(orjson.dumps({"id": i}) for i in range(5)) + b"\n")
-        config_path = tmp_path / "config.yaml"
-        config_path.write_text(
-            yaml.dump(
-                {
-                    "pipeline": [
-                        {
-                            "type": "source",
-                            "items": [str(input_file)],
-                            "outputs": {"main": "passthrough"},
-                        },
-                        {"type": "passthrough"},
-                    ],
-                    "execution": {"workers": 1, "queue_size": 50, "chunk_size": 20},
-                }
-            ),
-            encoding="utf-8",
-        )
-        output_dir = tmp_path / "output"
-
-        runner = CliRunner()
-        result = runner.invoke(
-            main,
-            [
-                "run",
-                "--config",
-                str(config_path),
-                "--output",
-                str(output_dir),
-            ],
-            obj=self._pipeline_obj(),
-        )
-        assert result.exit_code == 0, result.output
-        assert (output_dir / "stats.json").exists()
-
-    @pytest.mark.parametrize(
-        "args,match",
-        [
-            (["run", "--config", "nonexistent.yaml"], "does not exist"),
-            (["run", "--output", "/tmp/out"], "Missing option"),
-        ],
-        ids=["bad_yaml", "missing_config"],
-    )
-    def test_run_bad_args(self, args: list[str], match: str) -> None:
-        """Invalid args → non-zero exit code + error message."""
-        runner = CliRunner()
-        result = runner.invoke(main, args)
-        assert result.exit_code != 0
-        assert match.lower() in (result.output + (result.stderr or "")).lower()
-
-    @pytest.mark.timeout(30)
-    def test_run_unregistered_step(self, tmp_path: Path) -> None:
-        """Config references unregistered step → non-zero exit + message."""
-        config_path = tmp_path / "config.yaml"
-        config_path.write_text(
-            yaml.dump({"pipeline": [{"type": "nonexistent_step"}]}),
-            encoding="utf-8",
-        )
-        output_dir = tmp_path / "output"
-
-        runner = CliRunner()
-        result = runner.invoke(
-            main,
-            [
-                "run",
-                "--config",
-                str(config_path),
-                "--output",
-                str(output_dir),
-            ],
-        )
-        assert result.exit_code != 0
-
-
-class TestBatchCommand:
-    @staticmethod
-    def _pipeline_obj() -> dict[str, Pipeline]:
-        p = Pipeline()
-        p.register("source", DummyJsonlSourceStep)
-        p.register("passthrough", PassthroughStep)
-        return {"pipeline": p}
-
-    @pytest.mark.timeout(30)
-    def test_batch_sequential(self, tmp_path: Path) -> None:
-        """batch command → runs jobs sequentially, each output dir exists."""
-        # Create two input files and per-job configs
-        for i in range(2):
-            input_file = tmp_path / f"input_{i}.jsonl"
-            input_file.write_bytes(
-                b"\n".join(orjson.dumps({"id": j}) for j in range(3)) + b"\n"
-            )
-            config_path = tmp_path / f"config_{i}.yaml"
-            config_path.write_text(
-                yaml.dump(
-                    {
-                        "pipeline": [
-                            {
-                                "type": "source",
-                                "items": [str(input_file)],
-                                "outputs": {"main": "passthrough"},
-                            },
-                            {"type": "passthrough"},
-                        ],
-                        "execution": {"workers": 1, "queue_size": 50, "chunk_size": 20},
-                    }
-                ),
-                encoding="utf-8",
-            )
-
-        # Create jobs file
-        jobs = [
-            {
-                "config": str(tmp_path / f"config_{i}.yaml"),
-                "output_dir": str(tmp_path / f"out_{i}"),
-            }
-            for i in range(2)
-        ]
-        jobs_file = tmp_path / "jobs.json"
-        jobs_file.write_bytes(orjson.dumps(jobs))
-
-        runner = CliRunner()
-        result = runner.invoke(
-            main,
-            [
-                "batch",
-                str(jobs_file),
-            ],
-            obj=self._pipeline_obj(),
-        )
-        assert result.exit_code == 0, result.output
-        for i in range(2):
-            assert (tmp_path / f"out_{i}" / "stats.json").exists()
