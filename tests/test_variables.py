@@ -97,6 +97,72 @@ class TestLoadConfigVariables:
         cfg = load_config(yaml_file, variables={"base": "/mnt"})
         assert cfg.pipeline[0].model_extra["path"] == "/mnt/data.jsonl"
 
+    def test_default_value_used(self, tmp_path: Path) -> None:
+        """${var:-default} uses default when var is missing."""
+        yaml_file = tmp_path / "config.yaml"
+        yaml_file.write_text(
+            "pipeline:\n"
+            "  - type: loader\n"
+            "    path: ${base:-/default}/data.jsonl\n"
+        )
+        cfg = load_config(yaml_file, variables={})
+        assert cfg.pipeline[0].model_extra["path"] == "/default/data.jsonl"
+
+    def test_default_value_overridden(self, tmp_path: Path) -> None:
+        """${var:-default} uses variable value when var is provided."""
+        yaml_file = tmp_path / "config.yaml"
+        yaml_file.write_text(
+            "pipeline:\n"
+            "  - type: loader\n"
+            "    path: ${base:-/default}/data.jsonl\n"
+        )
+        cfg = load_config(yaml_file, variables={"base": "/custom"})
+        assert cfg.pipeline[0].model_extra["path"] == "/custom/data.jsonl"
+
+    def test_default_value_exact_match(self, tmp_path: Path) -> None:
+        """${var:-default} as entire value returns default string."""
+        yaml_file = tmp_path / "config.yaml"
+        yaml_file.write_text(
+            "pipeline:\n"
+            "  - type: loader\n"
+            "    mode: ${mode:-fast}\n"
+        )
+        cfg = load_config(yaml_file, variables={})
+        assert cfg.pipeline[0].model_extra["mode"] == "fast"
+
+    def test_default_value_empty_string(self, tmp_path: Path) -> None:
+        """${var:-} uses empty string as default."""
+        yaml_file = tmp_path / "config.yaml"
+        yaml_file.write_text(
+            "pipeline:\n"
+            "  - type: loader\n"
+            "    suffix: ${suffix:-}\n"
+        )
+        cfg = load_config(yaml_file, variables={})
+        assert cfg.pipeline[0].model_extra["suffix"] == ""
+
+    def test_escape_literal(self, tmp_path: Path) -> None:
+        """$${var} produces literal ${var}."""
+        yaml_file = tmp_path / "config.yaml"
+        yaml_file.write_text(
+            "pipeline:\n"
+            "  - type: loader\n"
+            "    pattern: $${NOT_A_VAR}\n"
+        )
+        cfg = load_config(yaml_file, variables={})
+        assert cfg.pipeline[0].model_extra["pattern"] == "${NOT_A_VAR}"
+
+    def test_escape_mixed_with_substitution(self, tmp_path: Path) -> None:
+        """$${literal} mixed with ${var} in same string."""
+        yaml_file = tmp_path / "config.yaml"
+        yaml_file.write_text(
+            "pipeline:\n"
+            "  - type: loader\n"
+            "    cmd: echo $${HOME} ${base}/data\n"
+        )
+        cfg = load_config(yaml_file, variables={"base": "/mnt"})
+        assert cfg.pipeline[0].model_extra["cmd"] == "echo ${HOME} /mnt/data"
+
     def test_no_variables_passthrough(self, tmp_path: Path) -> None:
         """Without variables, existing configs work unchanged."""
         yaml_file = tmp_path / "config.yaml"

@@ -299,10 +299,14 @@ python run.py ./data ./output
 | `${paths}` | `["/a.jsonl", "/b.jsonl"]` | `["/a.jsonl", "/b.jsonl"]` | `list` |
 | `${threshold}` | `42` | `42` | `int` |
 | `${output_dir}/result.jsonl` | `"/out"` | `"/out/result.jsonl"` | `str` |
+| `${mode:-fast}` | *(미제공)* | `"fast"` | `str` |
+| `$${NOT_A_VAR}` | — | `"${NOT_A_VAR}"` | `str` |
 
 - 값 전체가 `${var}`인 경우 → 변수 값을 그대로 대입 (list, dict, int 등 모든 타입)
 - 문자열 내부에 `${var}`가 포함된 경우 → `str()` 변환 후 문자열 치환
-- `variables` 제공 시 미해결 `${var}` → `ConfigValidationError` 발생
+- `${var:-default}` — 변수 미제공 시 `default` 값 사용
+- `$${var}` — 이스케이프, 리터럴 `${var}` 문자열로 출력
+- `variables` 제공 시 미해결 `${var}` (기본값 없음) → `ConfigValidationError` 발생
 - `variables` 미제공 시 `${...}`는 일반 문자열로 처리 (하위 호환)
 
 ### Config Rules

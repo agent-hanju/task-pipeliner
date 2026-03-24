@@ -123,7 +123,8 @@ class PipelineConfig(_WrappingModel):
         return self
 
 
-_VAR_PATTERN = re.compile(r"\$\{(\w+)\}")
+_VAR_PATTERN = re.compile(r"(?<!\$)\$\{(\w+)(?::-(.*?))?\}")
+_ESCAPE_PATTERN = re.compile(r"\$\$\{")
 
 
 def _resolve_variables(obj: Any, variables: dict[str, Any]) -> Any:
@@ -131,31 +132,41 @@ def _resolve_variables(obj: Any, variables: dict[str, Any]) -> Any:
 
     - If a string value is exactly ``${var}``, replace with the variable as-is
       (supports lists, dicts, numbers, etc.).
+    - ``${var:-default}`` uses ``default`` when ``var`` is not in variables.
+    - ``$${var}`` is an escape — produces literal ``${var}``.
     - If ``${var}`` appears within a larger string, do string substitution
       (variable value must be stringable).
-    - Raise ``ConfigValidationError`` for unresolved references.
+    - Raise ``ConfigValidationError`` for unresolved references (no default).
     """
     if isinstance(obj, str):
-        # Exact match: entire value is ${var} → replace with any type
+        # Exact match: entire value is ${var} or ${var:-default} → replace with any type
         m = _VAR_PATTERN.fullmatch(obj)
         if m:
             name = m.group(1)
-            if name not in variables:
-                raise ConfigValidationError(
-                    f"unresolved variable: ${{{name}}}", field=name
-                )
-            return variables[name]
+            default = m.group(2)
+            if name in variables:
+                return variables[name]
+            if default is not None:
+                return default
+            raise ConfigValidationError(
+                f"unresolved variable: ${{{name}}}", field=name
+            )
 
         # Partial match: ${var} embedded in a string → string substitution
         def _replacer(match: re.Match[str]) -> str:
             name = match.group(1)
-            if name not in variables:
-                raise ConfigValidationError(
-                    f"unresolved variable: ${{{name}}}", field=name
-                )
-            return str(variables[name])
+            default = match.group(2)
+            if name in variables:
+                return str(variables[name])
+            if default is not None:
+                return default
+            raise ConfigValidationError(
+                f"unresolved variable: ${{{name}}}", field=name
+            )
 
         result = _VAR_PATTERN.sub(_replacer, obj)
+        # Unescape: $${...} → ${...}
+        result = _ESCAPE_PATTERN.sub("${", result)
         return result if result != obj else obj
 
     if isinstance(obj, dict):
@@ -192,7 +203,9 @@ def load_config(
         Optional variable overrides for ``${var}`` substitution in the config.
         If the entire YAML value is ``${var}``, the variable replaces it as-is
         (supports lists, dicts, numbers). If ``${var}`` appears within a string,
-        it is substituted as a string.
+        it is substituted as a string. ``${var:-default}`` provides a fallback
+        when the variable is not in the dict. ``$${var}`` escapes to literal
+        ``${var}``.
     """
     logger.debug("path=%s variables=%s", path, variables)
     try:
@@ -201,7 +214,7 @@ def load_config(
         if not isinstance(data, dict):
             raise ConfigValidationError("config must be a YAML mapping")
 
-        if variables:
+        if variables is not None:
             data = _resolve_variables(data, variables)
 
         cfg = PipelineConfig(**data)    # pyright: ignore[reportUnknownArgumentType]
