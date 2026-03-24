@@ -94,6 +94,68 @@ class TestFormatProgress:
         result = format_progress(stats, step_names, 1.0)
         assert "ms/item" not in result
 
+    def test_percentage_shown_when_upstream_done(self) -> None:
+        """When all upstream steps are done, show processed/total (pct%)."""
+        from task_pipeliner.progress import format_progress
+
+        stats, step_names = self._make_stats([
+            {"name": "Source", "processed": 200, "emitted": {"": 200}, "state": "done"},
+            {"name": "Filter", "processed": 80, "emitted": {"kept": 60, "removed": 20},
+             "processing_ns": 400_000_000, "state": "processing"},
+        ])
+        upstream_for = {"Source": [], "Filter": [("Source", "")]}
+        result = format_progress(stats, step_names, 10.0, upstream_for)
+        assert "80/200" in result
+        assert "40.0%" in result
+        assert "→ 60 kept, 20 removed" in result
+
+    def test_no_percentage_when_upstream_still_running(self) -> None:
+        """Before upstream finishes, show count-based format without percentage."""
+        from task_pipeliner.progress import format_progress
+
+        stats, step_names = self._make_stats([
+            {"name": "Source", "processed": 100, "emitted": {"": 100}, "state": "processing"},
+            {"name": "Filter", "processed": 50, "emitted": {"kept": 40, "removed": 10},
+             "state": "processing"},
+        ])
+        upstream_for = {"Source": [], "Filter": [("Source", "")]}
+        result = format_progress(stats, step_names, 5.0, upstream_for)
+        assert "%" not in result
+        assert "50 in" in result
+
+    def test_percentage_with_fan_in(self) -> None:
+        """Fan-in: multiple upstream steps feed into one step."""
+        from task_pipeliner.progress import format_progress
+
+        stats, step_names = self._make_stats([
+            {"name": "Source", "processed": 100, "emitted": {"": 100}, "state": "done"},
+            {"name": "FilterA", "processed": 100, "emitted": {"kept": 60}, "state": "done"},
+            {"name": "FilterB", "processed": 100, "emitted": {"kept": 40}, "state": "done"},
+            {"name": "Merge", "processed": 70, "emitted": {"": 70}, "state": "processing"},
+        ])
+        upstream_for = {
+            "Source": [],
+            "FilterA": [("Source", "")],
+            "FilterB": [("Source", "")],
+            "Merge": [("FilterA", "kept"), ("FilterB", "kept")],
+        }
+        result = format_progress(stats, step_names, 10.0, upstream_for)
+        # Merge expects 60 + 40 = 100 total
+        assert "70/100" in result
+        assert "70.0%" in result
+
+    def test_no_percentage_without_upstream_for(self) -> None:
+        """Backward compat: no upstream_for → no percentage."""
+        from task_pipeliner.progress import format_progress
+
+        stats, step_names = self._make_stats([
+            {"name": "Source", "processed": 100, "emitted": {"": 100}, "state": "done"},
+            {"name": "Filter", "processed": 50, "emitted": {"kept": 40, "removed": 10},
+             "state": "processing"},
+        ])
+        result = format_progress(stats, step_names, 5.0)
+        assert "%" not in result
+
 
 class TestProgressReporter:
     def _make_reporter(

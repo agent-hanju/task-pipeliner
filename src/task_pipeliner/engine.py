@@ -262,6 +262,18 @@ class PipelineEngine:
 
         # 진행률 표시에 사용할 step 이름 목록
         step_names = [cfg.name for cfg in enabled_cfgs]
+
+        # upstream 맵 구성: step_name → [(upstream_name, tag), ...]
+        # ProgressReporter가 upstream 완료 시 total 계산에 사용
+        upstream_for: dict[str, list[tuple[str, str]]] = {n: [] for n in instance_by_name}
+        for step_cfg in enabled_cfgs:
+            if step_cfg.outputs is None:
+                continue
+            for tag, targets in step_cfg.outputs.items():
+                target_list = [targets] if isinstance(targets, str) else targets
+                for target_name in target_list:
+                    if target_name in instance_by_name:
+                        upstream_for[target_name].append((step_cfg.name, tag))
         # InputStepRunner는 별도 스레드에서 실행
         feeder = threading.Thread(target=input_runner.run, daemon=True)
         # 각 StepRunner도 별도 스레드에서 실행
@@ -286,6 +298,7 @@ class PipelineEngine:
             stats=self.stats,
             step_names=step_names,
             output_dir=output_dir,
+            upstream_for=upstream_for,
         )
 
         try:
