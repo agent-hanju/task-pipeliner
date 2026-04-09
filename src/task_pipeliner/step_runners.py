@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import atexit
 import logging
 import multiprocessing
@@ -15,7 +16,7 @@ from dataclasses import dataclass, field
 from multiprocessing.synchronize import Event
 from typing import Any
 
-from task_pipeliner.base import ParallelStep, SequentialStep, SourceStep, StepBase
+from task_pipeliner.base import AsyncStep, ParallelStep, SequentialStep, SourceStep, StepBase
 from task_pipeliner.stats import StatsCollector
 
 logger = logging.getLogger(__name__)
@@ -508,6 +509,108 @@ class ParallelStepRunner(BaseStepRunner):
             self._dispatch_output_state()
             self.stats.set_state(self.step_name, "done")
             logger.info("step runner finished step=%s", self.step_name)
+
+
+# ---------------------------------------------------------------------------
+# AsyncStepRunner
+# ---------------------------------------------------------------------------
+
+
+class AsyncStepRunner(BaseStepRunner):
+    """Runs an AsyncStep with bounded concurrency via asyncio.
+
+    Spawned as a thread (like other runners).  Inside that thread it calls
+    ``asyncio.run()`` to create a fresh event loop.  Blocking
+    ``multiprocessing.Queue.get()`` calls are bridged with
+    ``loop.run_in_executor`` so the event loop stays unblocked.
+
+    Concurrency is limited by ``step.concurrency`` (default 8) via
+    ``asyncio.Semaphore``.
+    """
+
+    step: AsyncStep
+
+    async def _process_one(
+        self,
+        item: Any,
+        sem: asyncio.Semaphore,
+        emit: Callable[[Any, str], None],
+    ) -> None:
+        """Process a single item under the semaphore, collecting stats."""
+        async with sem:
+            try:
+                proc_start = time.monotonic_ns()
+                await self.step.process_async(item, self.state, emit)
+                proc_ns = time.monotonic_ns() - proc_start
+                self.stats.add_processing_ns(self.step_name, proc_ns)
+                self.stats.increment(self.step_name, "processed")
+            except Exception:
+                self.stats.increment(self.step_name, "errored")
+                logger.warning(
+                    "process_async() raised for step=%s item=%s",
+                    self.step_name,
+                    repr(item)[:200],
+                    exc_info=True,
+                )
+
+    async def _run_async(self) -> None:
+        loop = asyncio.get_running_loop()
+        sem = asyncio.Semaphore(self.step.concurrency)
+        emit = self._make_emit()
+        first_item_recorded = False
+        sentinel_remaining = self.sentinel_count
+        pending: set[asyncio.Task[None]] = set()
+
+        try:
+            self.step.open()
+            self.stats.set_state(self.step_name, "idle")
+            logger.info("async step runner started step=%s", self.step_name)
+
+            while True:
+                # Bridge blocking queue.get() to async — keeps event loop free.
+                idle_start = time.monotonic_ns()
+                item = await loop.run_in_executor(None, self.input_queue.get)
+                idle_ns = time.monotonic_ns() - idle_start
+                self.stats.add_idle_ns(self.step_name, idle_ns)
+
+                if is_sentinel(item):
+                    sentinel_remaining -= 1
+                    if sentinel_remaining == 0:
+                        logger.info("all sentinels received step=%s", self.step_name)
+                        break
+                    logger.debug(
+                        "sentinel received (%d remaining) step=%s",
+                        sentinel_remaining,
+                        self.step_name,
+                    )
+                    continue
+
+                if not first_item_recorded:
+                    self.stats.record_first_item(self.step_name)
+                    first_item_recorded = True
+
+                self.stats.set_state(self.step_name, "processing")
+                task = asyncio.create_task(self._process_one(item, sem, emit))
+                pending.add(task)
+                task.add_done_callback(pending.discard)
+
+            # Drain all in-flight tasks before propagating the sentinel.
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+
+            self._send_sentinel()
+            self.stats.finish(self.step_name)
+        finally:
+            self.step.close()
+            self._dispatch_output_state()
+            self.stats.set_state(self.step_name, "done")
+            logger.info("async step runner finished step=%s", self.step_name)
+
+    def run(self) -> None:
+        logger.debug("run started step=%s", self.step_name)
+        # _wait_until_is_ready() blocks via threading.Event — call before asyncio.run().
+        self._wait_until_is_ready()
+        asyncio.run(self._run_async())
 
 
 # ---------------------------------------------------------------------------

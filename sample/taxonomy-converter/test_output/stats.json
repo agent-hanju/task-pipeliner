@@ -1,0 +1,76 @@
+[
+  {
+    "current_state": "done",
+    "elapsed_seconds": 0.0333,
+    "emitted": {
+      "main": 438
+    },
+    "errored": 0,
+    "idle_avg_ms": null,
+    "idle_seconds": 0.0,
+    "initial_wait_seconds": 0.0205,
+    "processed": 438,
+    "processing_avg_ms": 0.0,
+    "processing_seconds": 0.0,
+    "step_name": "loader"
+  },
+  {
+    "current_state": "done",
+    "elapsed_seconds": 0.3372,
+    "emitted": {
+      "kept": 372,
+      "removed": 66
+    },
+    "errored": 0,
+    "idle_avg_ms": 1.6098,
+    "idle_seconds": 0.0016,
+    "initial_wait_seconds": 0.0214,
+    "processed": 438,
+    "processing_avg_ms": 0.2594,
+    "processing_seconds": 0.1136,
+    "step_name": "preprocess"
+  },
+  {
+    "current_state": "done",
+    "elapsed_seconds": 0.5833,
+    "emitted": {
+      "kept": 372
+    },
+    "errored": 0,
+    "idle_avg_ms": 150.4895,
+    "idle_seconds": 0.301,
+    "initial_wait_seconds": 0.3063,
+    "processed": 372,
+    "processing_avg_ms": 0.0792,
+    "processing_seconds": 0.0294,
+    "step_name": "convert"
+  },
+  {
+    "current_state": "done",
+    "elapsed_seconds": 0.6224,
+    "emitted": {
+      "kept": 372
+    },
+    "errored": 0,
+    "idle_avg_ms": 567.3506,
+    "idle_seconds": 0.5674,
+    "initial_wait_seconds": 0.5729,
+    "processed": 372,
+    "processing_avg_ms": 0.0058,
+    "processing_seconds": 0.0021,
+    "step_name": "deduplicate"
+  },
+  {
+    "current_state": "done",
+    "elapsed_seconds": 0.6463,
+    "emitted": {},
+    "errored": 0,
+    "idle_avg_ms": 138.6943,
+    "idle_seconds": 0.5548,
+    "initial_wait_seconds": 0.3061,
+    "processed": 438,
+    "processing_avg_ms": 0.1332,
+    "processing_seconds": 0.0584,
+    "step_name": "writer"
+  }
+]

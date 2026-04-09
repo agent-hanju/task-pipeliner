@@ -1,0 +1,7 @@
+--- Pipeline Progress (0.6s) --------------------------------------------
+  loader                                          438 in → 438 main  [done]
+  preprocess               438 in → 372 kept, 66 removed  0.3ms/item  [done]
+  convert                             372 in → 372 kept  0.1ms/item  [done]
+  deduplicate                         372 in → 372 kept  0.0ms/item  [done]
+  writer                                   438 produced  0.1ms/item  [done]
+-------------------------------------------------------------------------

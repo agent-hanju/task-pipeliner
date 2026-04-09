@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Callable, Generator
 from pathlib import Path
@@ -9,7 +10,7 @@ from typing import Any
 
 import orjson
 
-from task_pipeliner.base import ParallelStep, SequentialStep, SourceStep, Worker
+from task_pipeliner.base import AsyncStep, ParallelStep, SequentialStep, SourceStep, Worker
 
 # ---------------------------------------------------------------------------
 # SOURCE steps
@@ -252,6 +253,65 @@ class LifecycleTrackingStep(SequentialStep):
 
     def close(self) -> None:
         self.closed = True
+
+
+# ---------------------------------------------------------------------------
+# ASYNC steps
+# ---------------------------------------------------------------------------
+
+
+class AsyncPassthroughStep(AsyncStep):
+    """Async step that emits item unchanged."""
+
+    outputs = ("main",)
+
+    async def process_async(
+        self, item: Any, state: Any, emit: Callable[[Any, str], None]
+    ) -> None:
+        emit(item, "main")
+
+
+class AsyncFilterEvenStep(AsyncStep):
+    """Async step that emits even integers, filters out odd ones."""
+
+    outputs = ("main",)
+
+    async def process_async(
+        self, item: int, state: Any, emit: Callable[[Any, str], None]
+    ) -> None:
+        if item % 2 == 0:
+            emit(item, "main")
+
+
+class AsyncSlowStep(AsyncStep):
+    """Async step that sleeps (asyncio) before emitting item."""
+
+    outputs = ("main",)
+
+    def __init__(self, sleep_seconds: float = 0.05, **_kwargs: Any) -> None:
+        self.sleep_seconds = sleep_seconds
+
+    async def process_async(
+        self, item: Any, state: Any, emit: Callable[[Any, str], None]
+    ) -> None:
+        await asyncio.sleep(self.sleep_seconds)
+        emit(item, "main")
+
+
+class AsyncErrorOnItemStep(AsyncStep):
+    """Async step that raises RuntimeError when item matches error_value."""
+
+    outputs = ("main",)
+
+    def __init__(self, error_value: Any = -1, **_kwargs: Any) -> None:
+        self.error_value = error_value
+
+    async def process_async(
+        self, item: Any, state: Any, emit: Callable[[Any, str], None]
+    ) -> None:
+        if item == self.error_value:
+            raise RuntimeError(f"Error triggered on item {item!r}")
+        emit(item, "main")
 
 
 class InitialStateStep(SequentialStep):

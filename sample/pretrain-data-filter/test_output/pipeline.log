@@ -1,0 +1,83 @@
+2026-03-24 19:56:26,433 DEBUG task_pipeliner.pipeline:_setup_log_handler:149 log handler attached path=test_output\pipeline.log
+2026-03-24 19:56:26,433 DEBUG task_pipeliner.engine:__init__:45 config steps=7 registry=7
+2026-03-24 19:56:26,434 INFO  task_pipeliner.engine:run:68 pipeline started steps=7 workers=4
+2026-03-24 19:56:26,444 DEBUG task_pipeliner.stats:register:75 step_name=loader
+2026-03-24 19:56:26,444 DEBUG task_pipeliner.stats:register:78 registered step loader
+2026-03-24 19:56:26,444 DEBUG task_pipeliner.stats:register:75 step_name=quality_filter
+2026-03-24 19:56:26,444 DEBUG task_pipeliner.stats:register:78 registered step quality_filter
+2026-03-24 19:56:26,444 DEBUG task_pipeliner.stats:register:75 step_name=hash_compute
+2026-03-24 19:56:26,458 DEBUG task_pipeliner.stats:register:78 registered step hash_compute
+2026-03-24 19:56:26,459 DEBUG task_pipeliner.stats:register:75 step_name=hash_lookup
+2026-03-24 19:56:26,459 DEBUG task_pipeliner.stats:register:78 registered step hash_lookup
+2026-03-24 19:56:26,459 DEBUG task_pipeliner.stats:register:75 step_name=minhash_compute
+2026-03-24 19:56:26,459 DEBUG task_pipeliner.stats:register:78 registered step minhash_compute
+2026-03-24 19:56:26,459 DEBUG task_pipeliner.stats:register:75 step_name=minhash_lookup
+2026-03-24 19:56:26,459 DEBUG task_pipeliner.stats:register:78 registered step minhash_lookup
+2026-03-24 19:56:26,459 DEBUG task_pipeliner.stats:register:75 step_name=writer
+2026-03-24 19:56:26,459 DEBUG task_pipeliner.stats:register:78 registered step writer
+2026-03-24 19:56:26,459 DEBUG task_pipeliner.step_runners:__init__:66 step=loader output_queues=1 tags
+2026-03-24 19:56:26,459 DEBUG task_pipeliner.step_runners:__init__:134 step=quality_filter output_queues=2 tags sentinel_count=1
+2026-03-24 19:56:26,460 DEBUG task_pipeliner.step_runners:__init__:134 step=hash_compute output_queues=1 tags sentinel_count=1
+2026-03-24 19:56:26,460 DEBUG task_pipeliner.step_runners:__init__:134 step=hash_lookup output_queues=2 tags sentinel_count=1
+2026-03-24 19:56:26,460 DEBUG task_pipeliner.step_runners:__init__:134 step=minhash_compute output_queues=1 tags sentinel_count=1
+2026-03-24 19:56:26,460 DEBUG task_pipeliner.step_runners:__init__:134 step=minhash_lookup output_queues=2 tags sentinel_count=1
+2026-03-24 19:56:26,460 DEBUG task_pipeliner.step_runners:__init__:134 step=writer output_queues=0 tags sentinel_count=3
+2026-03-24 19:56:26,460 DEBUG task_pipeliner.engine:run:257 built 6 step runners
+2026-03-24 19:56:26,460 DEBUG task_pipeliner.progress:run:90 ProgressReporter started interval=5.0
+2026-03-24 19:56:26,461 INFO  task_pipeliner.step_runners:run:74 input step runner started step=loader
+2026-03-24 19:56:26,462 DEBUG task_pipeliner.step_runners:run:417 run started step=quality_filter workers=4
+2026-03-24 19:56:26,462 DEBUG task_pipeliner.step_runners:_wait_until_is_ready:192 is_ready=True step=quality_filter
+2026-03-24 19:56:26,462 INFO  task_pipeliner.step_runners:run:431 step runner started step=quality_filter
+2026-03-24 19:56:26,463 DEBUG task_pipeliner.step_runners:run:417 run started step=hash_compute workers=4
+2026-03-24 19:56:26,463 DEBUG task_pipeliner.step_runners:_wait_until_is_ready:192 is_ready=True step=hash_compute
+2026-03-24 19:56:26,464 INFO  task_pipeliner.step_runners:run:431 step runner started step=hash_compute
+2026-03-24 19:56:26,463 DEBUG task_pipeliner.step_runners:run:233 run started step=hash_lookup
+2026-03-24 19:56:26,464 DEBUG task_pipeliner.step_runners:_wait_until_is_ready:192 is_ready=True step=hash_lookup
+2026-03-24 19:56:26,465 INFO  task_pipeliner.step_runners:run:241 step runner started step=hash_lookup
+2026-03-24 19:56:26,464 DEBUG task_pipeliner.step_runners:run:417 run started step=minhash_compute workers=4
+2026-03-24 19:56:26,468 DEBUG task_pipeliner.step_runners:_wait_until_is_ready:192 is_ready=True step=minhash_compute
+2026-03-24 19:56:26,468 INFO  task_pipeliner.step_runners:run:431 step runner started step=minhash_compute
+2026-03-24 19:56:26,467 DEBUG task_pipeliner.step_runners:run:233 run started step=minhash_lookup
+2026-03-24 19:56:26,469 DEBUG task_pipeliner.step_runners:_wait_until_is_ready:192 is_ready=True step=minhash_lookup
+2026-03-24 19:56:26,470 INFO  task_pipeliner.step_runners:run:241 step runner started step=minhash_lookup
+2026-03-24 19:56:26,470 INFO  task_pipeliner.step_runners:run:104 input step runner finished step=loader
+2026-03-24 19:56:26,469 DEBUG task_pipeliner.step_runners:run:233 run started step=writer
+2026-03-24 19:56:26,470 DEBUG task_pipeliner.step_runners:_wait_until_is_ready:192 is_ready=True step=writer
+2026-03-24 19:56:26,471 INFO  task_pipeliner.step_runners:run:241 step runner started step=writer
+2026-03-24 19:56:26,474 DEBUG task_pipeliner.step_runners:run:485 submitting chunk size=100
+2026-03-24 19:56:26,488 DEBUG task_pipeliner.step_runners:run:485 submitting chunk size=100
+2026-03-24 19:56:26,496 DEBUG task_pipeliner.step_runners:run:485 submitting chunk size=100
+2026-03-24 19:56:26,506 INFO  task_pipeliner.step_runners:run:455 all sentinels received step=quality_filter
+2026-03-24 19:56:26,506 DEBUG task_pipeliner.step_runners:run:460 submitting final chunk size=72
+2026-03-24 19:56:27,299 DEBUG task_pipeliner.step_runners:run:485 submitting chunk size=100
+2026-03-24 19:56:27,313 INFO  task_pipeliner.step_runners:_send_sentinel:204 sent sentinel to 2 unique queue(s) step=quality_filter
+2026-03-24 19:56:27,314 DEBUG task_pipeliner.step_runners:run:256 sentinel received (2 remaining) step=writer
+2026-03-24 19:56:27,314 DEBUG task_pipeliner.step_runners:run:485 submitting chunk size=100
+2026-03-24 19:56:27,333 DEBUG task_pipeliner.step_runners:run:485 submitting chunk size=100
+2026-03-24 19:56:27,340 INFO  task_pipeliner.step_runners:run:455 all sentinels received step=hash_compute
+2026-03-24 19:56:27,340 DEBUG task_pipeliner.step_runners:run:460 submitting final chunk size=36
+2026-03-24 19:56:27,434 INFO  task_pipeliner.step_runners:run:510 step runner finished step=quality_filter
+2026-03-24 19:56:28,062 INFO  task_pipeliner.step_runners:_send_sentinel:204 sent sentinel to 1 unique queue(s) step=hash_compute
+2026-03-24 19:56:28,069 DEBUG task_pipeliner.step_runners:run:485 submitting chunk size=100
+2026-03-24 19:56:28,093 DEBUG task_pipeliner.step_runners:run:485 submitting chunk size=100
+2026-03-24 19:56:28,096 INFO  task_pipeliner.step_runners:run:254 all sentinels received step=hash_lookup
+2026-03-24 19:56:28,097 INFO  task_pipeliner.step_runners:_send_sentinel:204 sent sentinel to 2 unique queue(s) step=hash_lookup
+2026-03-24 19:56:28,097 INFO  task_pipeliner.step_runners:run:289 step runner finished step=hash_lookup
+2026-03-24 19:56:28,097 DEBUG task_pipeliner.step_runners:run:256 sentinel received (1 remaining) step=writer
+2026-03-24 19:56:28,102 DEBUG task_pipeliner.step_runners:run:485 submitting chunk size=100
+2026-03-24 19:56:28,110 INFO  task_pipeliner.step_runners:run:455 all sentinels received step=minhash_compute
+2026-03-24 19:56:28,110 DEBUG task_pipeliner.step_runners:run:460 submitting final chunk size=36
+2026-03-24 19:56:28,217 INFO  task_pipeliner.step_runners:run:510 step runner finished step=hash_compute
+2026-03-24 19:56:29,046 INFO  task_pipeliner.step_runners:_send_sentinel:204 sent sentinel to 1 unique queue(s) step=minhash_compute
+2026-03-24 19:56:29,102 INFO  task_pipeliner.step_runners:run:254 all sentinels received step=minhash_lookup
+2026-03-24 19:56:29,103 INFO  task_pipeliner.step_runners:_send_sentinel:204 sent sentinel to 1 unique queue(s) step=minhash_lookup
+2026-03-24 19:56:29,103 INFO  task_pipeliner.step_runners:run:289 step runner finished step=minhash_lookup
+2026-03-24 19:56:29,123 INFO  task_pipeliner.step_runners:run:254 all sentinels received step=writer
+2026-03-24 19:56:29,123 INFO  task_pipeliner.step_runners:_send_sentinel:204 sent sentinel to 0 unique queue(s) step=writer
+2026-03-24 19:56:29,124 INFO  task_pipeliner.step_runners:run:289 step runner finished step=writer
+2026-03-24 19:56:29,154 INFO  task_pipeliner.step_runners:run:510 step runner finished step=minhash_compute
+2026-03-24 19:56:29,156 DEBUG task_pipeliner.progress:stop:128 ProgressReporter stopped
+2026-03-24 19:56:29,156 DEBUG task_pipeliner.stats:write_json:121 path=test_output\stats.json
+2026-03-24 19:56:29,158 INFO  task_pipeliner.stats:write_json:128 stats JSON written to test_output\stats.json
+2026-03-24 19:56:29,158 INFO  task_pipeliner.engine:run:348 pipeline completed
+2026-03-24 19:56:29,158 INFO  task_pipeliner.pipeline:run:127 pipeline completed config=C:\workspace\task-pipeliner\sample\pretrain-data-filter\pipeline_config.yaml elapsed=2.724s

@@ -1,0 +1,107 @@
+[
+  {
+    "current_state": "done",
+    "elapsed_seconds": 0.0259,
+    "emitted": {
+      "main": 372
+    },
+    "errored": 0,
+    "idle_avg_ms": null,
+    "idle_seconds": 0.0,
+    "initial_wait_seconds": 0.0201,
+    "processed": 372,
+    "processing_avg_ms": 0.0,
+    "processing_seconds": 0.0,
+    "step_name": "loader"
+  },
+  {
+    "current_state": "done",
+    "elapsed_seconds": 0.8691,
+    "emitted": {
+      "kept": 336,
+      "removed": 36
+    },
+    "errored": 0,
+    "idle_avg_ms": null,
+    "idle_seconds": 0.0,
+    "initial_wait_seconds": 0.026,
+    "processed": 372,
+    "processing_avg_ms": 0.2222,
+    "processing_seconds": 0.0826,
+    "step_name": "quality_filter"
+  },
+  {
+    "current_state": "done",
+    "elapsed_seconds": 1.6041,
+    "emitted": {
+      "main": 336
+    },
+    "errored": 0,
+    "idle_avg_ms": 411.5455,
+    "idle_seconds": 0.8231,
+    "initial_wait_seconds": 0.8298,
+    "processed": 336,
+    "processing_avg_ms": 0.0558,
+    "processing_seconds": 0.0187,
+    "step_name": "hash_compute"
+  },
+  {
+    "current_state": "done",
+    "elapsed_seconds": 1.6379,
+    "emitted": {
+      "kept": 336
+    },
+    "errored": 0,
+    "idle_avg_ms": 790.8999,
+    "idle_seconds": 1.5818,
+    "initial_wait_seconds": 1.5886,
+    "processed": 336,
+    "processing_avg_ms": 0.0068,
+    "processing_seconds": 0.0023,
+    "step_name": "hash_lookup"
+  },
+  {
+    "current_state": "done",
+    "elapsed_seconds": 2.5877,
+    "emitted": {
+      "main": 336
+    },
+    "errored": 0,
+    "idle_avg_ms": 315.6396,
+    "idle_seconds": 1.5782,
+    "initial_wait_seconds": 1.5896,
+    "processed": 336,
+    "processing_avg_ms": 1.522,
+    "processing_seconds": 0.5114,
+    "step_name": "minhash_compute"
+  },
+  {
+    "current_state": "done",
+    "elapsed_seconds": 2.6444,
+    "emitted": {
+      "kept": 329,
+      "removed": 7
+    },
+    "errored": 0,
+    "idle_avg_ms": 851.8221,
+    "idle_seconds": 2.5555,
+    "initial_wait_seconds": 2.4936,
+    "processed": 336,
+    "processing_avg_ms": 0.034,
+    "processing_seconds": 0.0114,
+    "step_name": "minhash_lookup"
+  },
+  {
+    "current_state": "done",
+    "elapsed_seconds": 2.665,
+    "emitted": {},
+    "errored": 0,
+    "idle_avg_ms": 361.4769,
+    "idle_seconds": 2.5303,
+    "initial_wait_seconds": 0.8301,
+    "processed": 372,
+    "processing_avg_ms": 0.218,
+    "processing_seconds": 0.0811,
+    "step_name": "writer"
+  }
+]

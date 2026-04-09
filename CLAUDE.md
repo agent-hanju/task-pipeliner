@@ -1,14 +1,13 @@
 # CLAUDE.md
 
 > Korean version: `docs/CLAUDE-ko.md`
-> WBS-based development methodology: `docs/WBS-CLAUDE.md`
 
-## WBS 준수
+## 구현 계획 준수
 
-- 프로젝트 루트의 `WBS.md`를 확인하고 준수한다.
-- 작업 착수 전 WBS의 의존 관계와 체크박스 상태를 반드시 확인한다.
-- 작업 완료 시 WBS의 해당 체크박스를 갱신한다.
-- WBS에 명시된 TDD 절차(레퍼런스 탐색 → 테스트 작성 → 구현 → 테스트 통과 → 린트/타입 → WBS 갱신)를 건너뛰지 않는다.
+- `docs/IMPLEMENTATION_PLAN.md` 를 확인하고 준수한다.
+- 작업 착수 전 의존 관계와 완료 상태를 반드시 확인한다.
+- 작업 완료 시 해당 항목을 ✅로 갱신한다.
+- 명시된 TDD 절차(레퍼런스 탐색 → 테스트 작성 → 구현 → 테스트 통과 → 린트/타입 → 계획 갱신)를 건너뛰지 않는다.
 
 ## Environment
 

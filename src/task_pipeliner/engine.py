@@ -9,12 +9,13 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from task_pipeliner.base import ParallelStep, SourceStep, StepBase
+from task_pipeliner.base import AsyncStep, ParallelStep, SourceStep, StepBase
 from task_pipeliner.config import PipelineConfig
 from task_pipeliner.exceptions import ConfigValidationError
 from task_pipeliner.progress import ProgressReporter
 from task_pipeliner.stats import StatsCollector
 from task_pipeliner.step_runners import (
+    AsyncStepRunner,
     InputStepRunner,
     ParallelStepRunner,
     Sentinel,
@@ -197,8 +198,8 @@ class PipelineEngine:
         # 호출하고, 반환된 {target_name: state} 매핑을 이 콜백으로 dispatch한다.
         # runner_by_name / state_events를 클로저로 캡처하므로,
         # StepRunner 생성 후에도 새로 추가된 StepRunner를 참조할 수 있다.
-        runners: list[SequentialStepRunner | ParallelStepRunner] = []
-        runner_by_name: dict[str, SequentialStepRunner | ParallelStepRunner] = {}
+        runners: list[SequentialStepRunner | ParallelStepRunner | AsyncStepRunner] = []
+        runner_by_name: dict[str, SequentialStepRunner | ParallelStepRunner | AsyncStepRunner] = {}
         state_events: dict[str, threading.Event] = {}
 
         def _state_dispatch(target_name: str, state: Any) -> None:
@@ -222,8 +223,9 @@ class PipelineEngine:
             state_events[step_name] = evt
 
             # ParallelStep → ProcessPoolExecutor 기반 ParallelStepRunner
+            # AsyncStep   → asyncio 이벤트 루프 기반 AsyncStepRunner
             # SequentialStep → 단일 스레드 SequentialStepRunner
-            p: SequentialStepRunner | ParallelStepRunner
+            p: SequentialStepRunner | ParallelStepRunner | AsyncStepRunner
             sc = sentinel_count_for[step_name]
             if isinstance(step, ParallelStep):
                 p = ParallelStepRunner(
@@ -236,6 +238,18 @@ class PipelineEngine:
                     sentinel_count=sc,
                     workers=self.config.execution.workers,
                     chunk_size=self.config.execution.chunk_size,
+                    state_changed_event=evt,
+                    state_dispatch=_state_dispatch,
+                )
+            elif isinstance(step, AsyncStep):
+                p = AsyncStepRunner(
+                    step=step,
+                    step_name=step_name,
+                    input_queue=in_q,
+                    output_queues=out_qs,
+                    stats=self.stats,
+                    state=step.initial_state,
+                    sentinel_count=sc,
                     state_changed_event=evt,
                     state_dispatch=_state_dispatch,
                 )

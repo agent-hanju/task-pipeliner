@@ -1,0 +1,9 @@
+--- Pipeline Progress (2.7s) --------------------------------------------
+  loader                                          372 in → 372 main  [done]
+  quality_filter           372 in → 336 kept, 36 removed  0.2ms/item  [done]
+  hash_compute                        336 in → 336 main  0.1ms/item  [done]
+  hash_lookup                         336 in → 336 kept  0.0ms/item  [done]
+  minhash_compute                     336 in → 336 main  1.5ms/item  [done]
+  minhash_lookup           336 in → 329 kept, 7 removed  0.0ms/item  [done]
+  writer                                   372 produced  0.2ms/item  [done]
+-------------------------------------------------------------------------

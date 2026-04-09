@@ -113,6 +113,54 @@ class SequentialStep(StepBase, ABC):
 
 
 # ---------------------------------------------------------------------------
+# AsyncStep
+# ---------------------------------------------------------------------------
+
+
+class AsyncStep(StepBase, ABC):
+    """Base class for I/O-bound async steps (e.g. LLM API calls, HTTP requests).
+
+    Unlike ``ParallelStep`` which uses ``ProcessPoolExecutor``, ``AsyncStep``
+    runs an ``asyncio`` event loop in a single thread and limits concurrency
+    with a ``Semaphore``.  This is the right choice for I/O-bound tasks that
+    use ``asyncio``-native libraries (``aiohttp``, ``httpx``, etc.).
+
+    Must implement ``process_async()`` — an async coroutine that processes
+    one item and calls ``emit`` to forward results downstream.
+    """
+
+    @property
+    def concurrency(self) -> int:
+        """Maximum number of concurrent ``process_async()`` coroutines.
+
+        Override in subclasses to tune per-step parallelism.
+        Default: 8.
+        """
+        return 8
+
+    @abstractmethod
+    async def process_async(
+        self, item: Any, state: Any, emit: Callable[[Any, str], None]
+    ) -> None:
+        """Process a single item asynchronously.
+
+        *emit(item, tag)* — sync callback to forward items downstream.
+        Safe to call from async context (puts to ``multiprocessing.Queue``).
+
+        ``outputs = ()`` steps (terminal) must NOT call emit —
+        doing so raises ``RuntimeError``.
+
+        **Warning — state is shared across concurrent coroutines.**
+        Multiple ``process_async()`` calls run concurrently (up to
+        ``concurrency``).  Do NOT mutate ``state`` inside this method —
+        concurrent writes are not protected by any lock and will cause data
+        corruption.  If you need stateful accumulation, use
+        ``SequentialStep`` instead.
+        """
+        ...
+
+
+# ---------------------------------------------------------------------------
 # Worker
 # ---------------------------------------------------------------------------
 
