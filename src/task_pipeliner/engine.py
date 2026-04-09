@@ -13,11 +13,13 @@ from task_pipeliner.base import AsyncStep, ParallelStep, SourceStep, StepBase
 from task_pipeliner.config import PipelineConfig
 from task_pipeliner.exceptions import ConfigValidationError
 from task_pipeliner.progress import ProgressReporter
+from task_pipeliner.spill_queue import SpillQueue
 from task_pipeliner.stats import StatsCollector
 from task_pipeliner.step_runners import (
     AsyncStepRunner,
     InputStepRunner,
     ParallelStepRunner,
+    QueueLike,
     Sentinel,
     SequentialStepRunner,
 )
@@ -134,18 +136,24 @@ class PipelineEngine:
         # SOURCE를 제외한 나머지 step들 (처리 대상)
         processing_names = [cfg.name for cfg in enabled_cfgs if cfg.name != source_name]
 
-        output_queues_map: dict[str, dict[str, list[multiprocessing.Queue[Any]]]] = {
+        output_queues_map: dict[str, dict[str, list[QueueLike]]] = {
             n: {} for n in instance_by_name
         }
 
         # 각 처리 step에 하나의 공유 입력 큐를 생성
-        input_queue_for: dict[str, multiprocessing.Queue[Any]] = {}
-        all_queues: list[multiprocessing.Queue[Any]] = []
+        # queue_size > 0 이면 SpillQueue(메모리 한도 + 디스크 스필),
+        # queue_size == 0 이면 기존 multiprocessing.Queue(무한 메모리).
+        queue_size = self.config.execution.queue_size
+        input_queue_for: dict[str, QueueLike] = {}
+        all_queues: list[QueueLike] = []
         for step_name in processing_names:
-            q: multiprocessing.Queue[Any] = ctx.Queue()
-            # 프로듀서 스레드 종료 시 Queue 내부 feeder thread의
-            # pipe flush를 기다리지 않도록 설정.
-            q.cancel_join_thread()
+            if queue_size > 0:
+                q: QueueLike = SpillQueue(maxmem=queue_size)
+            else:
+                q = ctx.Queue()
+                # 프로듀서 스레드 종료 시 Queue 내부 feeder thread의
+                # pipe flush를 기다리지 않도록 설정.
+                q.cancel_join_thread()
             input_queue_for[step_name] = q
             all_queues.append(q)
 
@@ -349,6 +357,10 @@ class PipelineEngine:
         finally:
             # 진행률 리포터 중지
             reporter.stop()
+            # SpillQueue 인스턴스 정리
+            for q in all_queues:
+                if isinstance(q, SpillQueue):
+                    q.close()
             # 콘솔 로그 전파 복원
             parent_logger.propagate = original_propagate
 

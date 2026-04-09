@@ -14,12 +14,46 @@ from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from multiprocessing.synchronize import Event
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from task_pipeliner.base import AsyncStep, ParallelStep, SequentialStep, SourceStep, StepBase
 from task_pipeliner.stats import StatsCollector
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "AsyncStepRunner",
+    "BaseStepRunner",
+    "ErrorSentinel",
+    "InputStepRunner",
+    "ParallelStepRunner",
+    "QueueLike",
+    "Sentinel",
+    "SequentialStepRunner",
+    "is_sentinel",
+]
+
+
+# ---------------------------------------------------------------------------
+# Queue protocol — shared by multiprocessing.Queue and SpillQueue
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class QueueLike(Protocol):
+    """Minimal queue interface shared by *multiprocessing.Queue* and *SpillQueue*.
+
+    Notes
+    -----
+    ``cancel_join_thread()`` is a no-op on *SpillQueue* but required here for
+    *multiprocessing.Queue* API compatibility.
+    """
+
+    def put(self, obj: Any, block: bool = True, timeout: float | None = None) -> None: ...
+    def put_nowait(self, obj: Any) -> None: ...
+    def get(self, block: bool = True, timeout: float | None = None) -> Any: ...
+    def empty(self) -> bool: ...
+    def cancel_join_thread(self) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +95,7 @@ class InputStepRunner:
         *,
         step: SourceStep,
         step_name: str,
-        output_queues: dict[str, list[multiprocessing.Queue[Any]]],
+        output_queues: dict[str, list[QueueLike]],
         stats: StatsCollector | None = None,
     ) -> None:
         logger.debug("step=%s output_queues=%d tags", step_name, len(output_queues))
@@ -123,8 +157,8 @@ class BaseStepRunner(ABC):
         *,
         step: StepBase,
         step_name: str,
-        input_queue: multiprocessing.Queue[Any],
-        output_queues: dict[str, list[multiprocessing.Queue[Any]]],
+        input_queue: QueueLike,
+        output_queues: dict[str, list[QueueLike]],
         stats: StatsCollector,
         state: Any = None,
         sentinel_count: int = 1,
