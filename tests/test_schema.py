@@ -17,6 +17,7 @@ from task_pipeliner.base import (
 from task_pipeliner.config import (
     ExecutionConfig,
     PipelineConfig,
+    QueueType,
     StepConfig,
     load_config,
 )
@@ -292,6 +293,16 @@ class TestExecutionConfig:
         assert cfg.workers == 4
         assert cfg.queue_size == 0
         assert cfg.chunk_size == 100
+        assert cfg.queue_type == QueueType.AUTO
+
+    def test_queue_type_values(self) -> None:
+        assert ExecutionConfig(queue_type="spill").queue_type == QueueType.SPILL
+        assert ExecutionConfig(queue_type="full_disk").queue_type == QueueType.FULL_DISK
+        assert ExecutionConfig(queue_type="auto").queue_type == QueueType.AUTO
+
+    def test_queue_type_invalid_rejected(self) -> None:
+        with pytest.raises(ConfigValidationError):
+            ExecutionConfig(queue_type="unknown")
 
     @pytest.mark.parametrize("field", ["workers", "chunk_size"])
     def test_zero_value_rejected(self, field: str) -> None:
@@ -316,6 +327,17 @@ class TestPipelineConfig:
         cfg = PipelineConfig(pipeline=[StepConfig(type="filter")])
         assert len(cfg.pipeline) == 1
         assert cfg.execution.workers == 4
+        assert cfg.checkpoint_dir is None
+        assert cfg.resume_run_id is None
+
+    def test_checkpoint_fields(self, tmp_path: Path) -> None:
+        cfg = PipelineConfig(
+            pipeline=[StepConfig(type="filter")],
+            checkpoint_dir=tmp_path / "ckpt",
+            resume_run_id="abc123",
+        )
+        assert cfg.checkpoint_dir == tmp_path / "ckpt"
+        assert cfg.resume_run_id == "abc123"
 
     def test_empty_pipeline_rejected(self) -> None:
         with pytest.raises(ConfigValidationError):

@@ -17,6 +17,7 @@ from multiprocessing.synchronize import Event
 from typing import Any, Protocol, runtime_checkable
 
 from task_pipeliner.base import AsyncStep, ParallelStep, SequentialStep, SourceStep, StepBase
+from task_pipeliner.checkpoint import CheckpointStore, NullCheckpointStore
 from task_pipeliner.stats import StatsCollector
 
 logger = logging.getLogger(__name__)
@@ -97,22 +98,32 @@ class InputStepRunner:
         step_name: str,
         output_queues: dict[str, list[QueueLike]],
         stats: StatsCollector | None = None,
+        checkpoint: CheckpointStore | None = None,
     ) -> None:
         logger.debug("step=%s output_queues=%d tags", step_name, len(output_queues))
         self._step = step
         self._step_name = step_name
         self._output_queues = output_queues
         self._stats = stats
+        self._checkpoint: CheckpointStore = (
+            checkpoint if checkpoint is not None else NullCheckpointStore()
+        )
 
     def run(self) -> None:
         """Iterate step.items() into output queues, then send sentinel."""
         logger.info("input step runner started step=%s", self._step_name)
         first_item_recorded = False
+        skipped = 0
         try:
             self._step.open()
             if self._stats is not None:
                 self._stats.set_state(self._step_name, "processing")
             for item in self._step.items():
+                key = self._step.item_key(item)
+                if key is not None and self._checkpoint.is_done(key):
+                    skipped += 1
+                    logger.debug("checkpoint skip key=%s", key)
+                    continue
                 if not first_item_recorded and self._stats is not None:
                     self._stats.record_first_item(self._step_name)
                     first_item_recorded = True
@@ -123,6 +134,10 @@ class InputStepRunner:
                         self._stats.increment_emitted(self._step_name, tag)
                 if self._stats is not None:
                     self._stats.increment(self._step_name, "processed")
+                if key is not None:
+                    self._checkpoint.mark_done(key)
+            if skipped:
+                logger.info("checkpoint skipped %d items step=%s", skipped, self._step_name)
         finally:
             self._step.close()
             sentinel = Sentinel()

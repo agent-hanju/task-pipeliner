@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import logging
 import multiprocessing
+import shutil
 import signal
+import tempfile
 import threading
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from task_pipeliner.base import AsyncStep, ParallelStep, SourceStep, StepBase
-from task_pipeliner.config import PipelineConfig
+from task_pipeliner.base import AsyncStep, ParallelStep, SequentialStep, SourceStep, StepBase
+from task_pipeliner.checkpoint import make_checkpoint_store
+from task_pipeliner.config import PipelineConfig, QueueType
 from task_pipeliner.exceptions import ConfigValidationError
 from task_pipeliner.progress import ProgressReporter
-from task_pipeliner.spill_queue import SpillQueue
+from task_pipeliner.spill_queue import FullDiskQueue, SpillQueue
 from task_pipeliner.stats import StatsCollector
 from task_pipeliner.step_runners import (
     AsyncStepRunner,
@@ -73,6 +77,11 @@ class PipelineEngine:
             len(self.config.pipeline),
             self.config.execution.workers,
         )
+        # checkpoint 초기화 — checkpoint_dir 미설정 시 NullCheckpointStore (no-op)
+        run_id = self.config.resume_run_id or str(uuid.uuid4())
+        checkpoint = make_checkpoint_store(self.config.checkpoint_dir, run_id)
+        logger.info("run_id=%s checkpoint=%s", run_id, type(checkpoint).__name__)
+
         # spawn 모드 컨텍스트 — Windows 호환을 위해 fork 대신 spawn 사용
         ctx = multiprocessing.get_context("spawn")
 
@@ -141,14 +150,31 @@ class PipelineEngine:
         }
 
         # 각 처리 step에 하나의 공유 입력 큐를 생성
-        # queue_size > 0 이면 SpillQueue(메모리 한도 + 디스크 스필),
-        # queue_size == 0 이면 기존 multiprocessing.Queue(무한 메모리).
+        # queue_type에 따라 FullDiskQueue / SpillQueue / multiprocessing.Queue 선택.
         queue_size = self.config.execution.queue_size
+        queue_type = self.config.execution.queue_type
+        # FullDiskQueue 인스턴스가 하나라도 생기면 tmpdir이 필요함 (파이프라인 종료 시 삭제)
+        _disk_tmpdir: str | None = None
         input_queue_for: dict[str, QueueLike] = {}
         all_queues: list[QueueLike] = []
         for step_name in processing_names:
-            if queue_size > 0:
-                q: QueueLike = SpillQueue(maxmem=queue_size)
+            step = instance_by_name[step_name]
+            use_disk = (
+                queue_type == QueueType.FULL_DISK
+                or (
+                    queue_type == QueueType.AUTO
+                    and isinstance(step, SequentialStep)
+                    and type(step).is_ready is not StepBase.is_ready
+                )
+            )
+            q: QueueLike
+            if use_disk:
+                if _disk_tmpdir is None:
+                    _disk_tmpdir = tempfile.mkdtemp(prefix="task_pipeliner_queue_")
+                q = FullDiskQueue(Path(_disk_tmpdir) / step_name)
+                logger.info("step '%s' using FullDiskQueue (is_ready override detected)", step_name)
+            elif queue_size > 0:
+                q = SpillQueue(maxmem=queue_size)
             else:
                 q = ctx.Queue()
                 # 프로듀서 스레드 종료 시 Queue 내부 feeder thread의
@@ -198,6 +224,7 @@ class PipelineEngine:
             step_name=source_name,
             output_queues=output_queues_map[source_name],
             stats=self.stats,
+            checkpoint=checkpoint,
         )
 
         # 나머지 step들의 StepRunner 생성
@@ -296,8 +323,21 @@ class PipelineEngine:
             signal.getsignal(signal.SIGBREAK) if hasattr(signal, "SIGBREAK") else None
         )
 
+        # 30초마다 stats를 디스크에 flush하는 daemon 스레드
+        _stats_stop = threading.Event()
+
+        def _stats_flush_loop() -> None:
+            while not _stats_stop.wait(30):
+                self.stats.write_json(output_dir / "stats.json")
+                logger.debug("stats flushed periodically")
+
+        stats_flush_thread = threading.Thread(
+            target=_stats_flush_loop, daemon=True, name="stats-flusher"
+        )
+
         def _signal_handler(signum: int, frame: Any) -> None:
             logger.error("signal %d received — initiating shutdown", signum)
+            self.stats.write_json(output_dir / "stats.json")
             shutdown_event.set()
 
         # 실행 중에는 콘솔 로그 전파를 끔 (ProgressReporter가 대신 표시)
@@ -322,6 +362,7 @@ class PipelineEngine:
             output_dir.mkdir(parents=True, exist_ok=True)
             # 진행률 리포터 시작 (별도 스레드에서 주기적으로 콘솔 출력)
             reporter.start()
+            stats_flush_thread.start()
 
             # 모든 스레드 시작
             feeder.start()
@@ -355,12 +396,23 @@ class PipelineEngine:
         # 7단계: 정리 — 결과 수집, stats 저장, 시그널 복원
         # ======================================================================
         finally:
+            # stats flush 스레드 중지
+            _stats_stop.set()
             # 진행률 리포터 중지
             reporter.stop()
-            # SpillQueue 인스턴스 정리
+            # SpillQueue / FullDiskQueue 인스턴스 정리
             for q in all_queues:
                 if isinstance(q, SpillQueue):
                     q.close()
+                elif isinstance(q, FullDiskQueue):
+                    q.close()
+            # FullDiskQueue 임시 디렉토리 삭제
+            if _disk_tmpdir is not None:
+                try:
+                    shutil.rmtree(_disk_tmpdir, ignore_errors=True)
+                    logger.debug("removed disk queue tmpdir=%s", _disk_tmpdir)
+                except OSError:
+                    pass
             # 콘솔 로그 전파 복원
             parent_logger.propagate = original_propagate
 
@@ -369,6 +421,8 @@ class PipelineEngine:
             if hasattr(signal, "SIGBREAK") and original_sigbreak is not None:
                 signal.signal(signal.SIGBREAK, original_sigbreak)
 
+            # checkpoint store 정리
+            checkpoint.close()
             # 통계 JSON 저장
             self.stats.write_json(output_dir / "stats.json")
             logger.info("pipeline completed")

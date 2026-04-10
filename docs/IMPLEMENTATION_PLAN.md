@@ -1,7 +1,7 @@
 # Implementation Plan: task-pipeliner
 
 > 이 문서는 task-pipeliner 프레임워크의 구현 계획 및 진행 상태를 기록한다.
-> 작성일: 2026-03-01 | 최종 갱신: 2026-04-09
+> 작성일: 2026-03-01 | 최종 갱신: 2026-04-10
 
 ---
 
@@ -9,7 +9,7 @@
 
 범용 데이터 처리 파이프라인 프레임워크. YAML config 기반으로 Step을 선언하고, 멀티프로세스/비동기 실행 엔진이 데이터를 흘려보내는 구조. taxonomy-converter, pretrain-data-filter 등 샘플 프로젝트의 실제 사용을 통해 안티패턴을 발견·제거하면서 프레임워크 순수성을 높였다.
 
-**상태:** 기반 구현 완료 (M-01 ~ M-24 + P1 AsyncStep). 다음 목표: P2 Retry 지원.
+**상태:** 기반 구현 완료 (M-01 ~ M-24 + AsyncStep + SpillQueue). 다음 목표: P2 Retry 지원.
 
 ---
 
@@ -203,6 +203,27 @@ StepBase
 
 ---
 
+### Phase 11: SpillQueue — 메모리 한계 디스크 스필 큐 ✅ (2026-04-10 완료)
+
+**목표:** 대용량 처리 시 OOM 방지. 큐 항목이 `maxmem` 초과 시 임시 파일에 직렬화, 메모리 여유 생기면 자동 복원.
+
+| ID | 작업 | 상태 |
+|----|------|------|
+| S-01 | `spill_queue.py` — SpillQueue 구현 (8-byte 길이 prefix + pickle, `_refill_loop` 데몬 스레드) | ✅ |
+| S-02 | `step_runners.py` — `QueueLike` Protocol 추가 (SpillQueue ↔ multiprocessing.Queue 호환) | ✅ |
+| S-03 | `engine.py` — `execution.queue_size > 0` 시 SpillQueue 활성화, finally에서 `close()` 호출 | ✅ |
+| S-04 | `config.py` — `ExecutionConfig.queue_size` 필드 추가 (기본 0 = unbounded) | ✅ |
+| S-05 | `__init__.py` — `SpillQueue` export 추가 | ✅ |
+| S-06 | `tests/test_spill_queue.py` — 19개 테스트 (Protocol 준수, FIFO, spill 트리거, 병렬 스레드, close 정리 등) | ✅ |
+
+**설계 결정:**
+- SpillQueue는 스레드 전용 (프로세스 간 전달 불필요 — 큐는 메인 프로세스에만 존재)
+- `_refill_cond` (threading.Condition) 이 모든 공유 상태와 파일 I/O 직렬화
+- unbuffered I/O (`buffering=0`) — `write_fd.flush()` 후 즉시 `read_fd`로 읽기 가능
+- `maxmem=0` 시 밸리데이션 오류 (무한 디스크 스필 방지)
+
+---
+
 ## Risks & Mitigations
 
 | 위험 | 대응 |
@@ -210,7 +231,7 @@ StepBase
 | spawn 모드 pickle 오류 | 모든 Step/Worker 클래스를 모듈 레벨에 정의. Engine에서 조기 검증. |
 | asyncio + multiprocessing 큐 데드락 | `run_in_executor` 브리지 + sentinel 수신 시 `asyncio.gather` 드레인 |
 | state 동시 뮤테이션 (AsyncStep) | docstring 경고 + 뮤테이션 필요 시 SequentialStep 사용 권장 |
-| 대용량 처리 OOM (unbounded 큐) | DiskSpillQueue 후속 작업으로 분리 (이번 범위 외) |
+| 대용량 처리 OOM (unbounded 큐) | SpillQueue 도입으로 해결 — `execution.queue_size > 0` 설정 시 활성화 |
 
 ---
 
@@ -220,4 +241,5 @@ StepBase
 - [x] `ruff check src tests` — 오류 없음
 - [x] `mypy src` — 오류 없음
 - [x] `__all__` 에 공개 심볼 전부 포함
+- [x] SpillQueue — `maxmem` 초과 시 디스크 스필, 19개 테스트 통과
 - [ ] P2 Retry — 재시도 시나리오 테스트 통과

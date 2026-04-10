@@ -13,6 +13,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+disk-queue = ["persist-queue>=0.8.0"]
+checkpoint = ["diskcache>=5.6.0"]
+full = ["persist-queue>=0.8.0", "diskcache>=5.6.0"]
 dev = [
     "pytest>=8.0",
     "pytest-timeout>=2.3",

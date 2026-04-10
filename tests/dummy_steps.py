@@ -314,6 +314,38 @@ class AsyncErrorOnItemStep(AsyncStep):
         emit(item, "main")
 
 
+# ---------------------------------------------------------------------------
+# Checkpoint / queue-type test helpers
+# ---------------------------------------------------------------------------
+
+
+class KeyedSourceStep(SourceStep):
+    """SOURCE step that implements item_key() — for checkpoint integration tests."""
+
+    outputs = ("main",)
+
+    def __init__(self, items: list[Any] | None = None) -> None:
+        self._items = items or []
+
+    def items(self) -> Generator[Any, None, None]:
+        yield from self._items
+
+    def item_key(self, item: Any) -> str | None:
+        return str(item)
+
+
+class ReadyGatedSequentialStep(SequentialStep):
+    """SEQUENTIAL step that overrides is_ready() — for AUTO queue-type e2e tests."""
+
+    outputs = ("main",)
+
+    def is_ready(self, state: Any) -> bool:  # noqa: ARG002
+        return True  # always ready; the override itself is what matters
+
+    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
+        emit(item, "main")
+
+
 class InitialStateStep(SequentialStep):
     """SEQUENTIAL step that provides initial_state and mutates it during process()."""
 

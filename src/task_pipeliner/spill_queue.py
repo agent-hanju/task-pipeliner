@@ -265,3 +265,69 @@ class SpillQueue:
                         moved,
                         self._disk_count,
                     )
+
+
+class FullDiskQueue:
+    """Disk-primary FIFO queue for is_ready()-gated pipeline steps.
+
+    All items are written to disk immediately.  Use this queue when the
+    upstream stage must fully complete before the downstream stage starts
+    (i.e. the downstream step overrides ``is_ready()``).  Unlike
+    :class:`SpillQueue`, there is no in-memory buffer — every ``put()``
+    goes straight to disk and every ``get()`` reads from disk.
+
+    Backend: ``persistqueue.Queue`` (file-based, no SQLite dependency).
+
+    .. note::
+        Requires the ``disk-queue`` optional dependency::
+
+            pip install "task-pipeliner[disk-queue]"
+
+    Parameters
+    ----------
+    path:
+        Directory path for the queue's backing files.  Created automatically
+        if it does not exist.
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        try:
+            import persistqueue
+        except ImportError as exc:
+            raise ImportError(
+                "FullDiskQueue requires the 'persist-queue' package. "
+                "Install it with: pip install \"task-pipeliner[disk-queue]\""
+            ) from exc
+        logger.debug("path=%s", path)
+        self._q = persistqueue.Queue(str(path), autosave=True)
+        logger.info("FullDiskQueue opened path=%s", path)
+
+    def put(self, item: Any, block: bool = True, timeout: float | None = None) -> None:
+        """Write *item* to disk (block and timeout are unused — disk writes are synchronous)."""
+        self._q.put(item)
+
+    def put_nowait(self, item: Any) -> None:
+        """Non-blocking put (alias for ``put()``)."""
+        self._q.put_nowait(item)
+
+    def get(self, block: bool = True, timeout: float | None = None) -> Any:
+        """Block until an item is available and return it."""
+        if timeout is not None:
+            return self._q.get(block=True, timeout=timeout)
+        return self._q.get(block=True)
+
+    def empty(self) -> bool:
+        """Return ``True`` if the queue contains no items."""
+        return self._q.empty()
+
+    def cancel_join_thread(self) -> None:
+        """No-op — FullDiskQueue has no background thread to cancel."""
+
+    def task_done(self) -> None:
+        """Signal that the previously retrieved item has been processed."""
+        self._q.task_done()
+
+    def close(self) -> None:
+        """Release persistqueue resources."""
+        if hasattr(self._q, "close"):
+            self._q.close()

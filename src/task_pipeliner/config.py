@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,18 @@ class _WrappingModel(BaseModel):
             raise self.__class__._wrap(e) from e
 
 
+class QueueType(StrEnum):
+    """Queue implementation to use for inter-step communication."""
+
+    AUTO = "auto"
+    """Detect ``is_ready()`` override on downstream step → FullDiskQueue;
+    otherwise SpillQueue or plain Queue."""
+    SPILL = "spill"
+    """Always use SpillQueue (memory-first, spills to disk when buffer is full)."""
+    FULL_DISK = "full_disk"
+    """Always use FullDiskQueue (disk-primary, every item written to disk immediately)."""
+
+
 class StepConfig(_WrappingModel):
     model_config = ConfigDict(extra="allow")
 
@@ -63,6 +76,8 @@ class ExecutionConfig(_WrappingModel):
     queue_size: int = 0
     """queue_size is reserved for future disk-spill threshold. 0 means unbounded."""
     chunk_size: int = 100
+    queue_type: QueueType = QueueType.AUTO
+    """Queue implementation strategy. AUTO detects is_ready() override automatically."""
 
     @field_validator("workers", "chunk_size")
     @classmethod
@@ -84,6 +99,11 @@ class PipelineConfig(_WrappingModel):
 
     pipeline: list[StepConfig]
     execution: ExecutionConfig = ExecutionConfig()
+    checkpoint_dir: Path | None = None
+    """Directory for checkpoint state. When set, enables
+    DiskCacheCheckpointStore (requires diskcache)."""
+    resume_run_id: str | None = None
+    """Run ID from a previous interrupted run. When set, already-processed items are skipped."""
 
     @model_validator(mode="after")
     def _pipeline_not_empty(self) -> PipelineConfig:

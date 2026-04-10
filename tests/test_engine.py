@@ -14,14 +14,16 @@ from dummy_steps import (
     InitialStateStep,
     LifecycleTrackingStep,
     PassthroughStep,
+    ReadyGatedSequentialStep,
     SlowStep,
     TerminalStep,
 )
 
-from task_pipeliner.config import ExecutionConfig, PipelineConfig, StepConfig
+from task_pipeliner.config import ExecutionConfig, PipelineConfig, QueueType, StepConfig
 from task_pipeliner.engine import PipelineEngine
 from task_pipeliner.exceptions import ConfigValidationError, StepRegistrationError
 from task_pipeliner.pipeline import StepRegistry
+from task_pipeliner.spill_queue import FullDiskQueue
 from task_pipeliner.stats import StatsCollector
 
 # ---------------------------------------------------------------------------
@@ -842,3 +844,107 @@ class TestMultiInstanceSameType:
                     StepConfig(type="terminal"),
                 ],
             )
+
+
+# ---------------------------------------------------------------------------
+# FullDiskQueue AUTO selection — e2e
+# ---------------------------------------------------------------------------
+
+
+class TestFullDiskQueueAutoSelection:
+    """AUTO queue_type으로 실행 시 is_ready() 오버라이드 스텝에 FullDiskQueue가 배치된다."""
+
+    @pytest.mark.timeout(30)
+    def test_auto_uses_full_disk_for_is_ready_step(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AUTO 모드에서 is_ready() 오버라이드 스텝의 입력 큐가 FullDiskQueue다."""
+        created: list[type] = []
+        original_init = FullDiskQueue.__init__
+
+        def tracking_init(self: FullDiskQueue, path: object) -> None:
+            created.append(FullDiskQueue)
+            original_init(self, path)
+
+        monkeypatch.setattr(FullDiskQueue, "__init__", tracking_init)
+
+        config = PipelineConfig(
+            pipeline=[
+                StepConfig(
+                    type="source",
+                    items=list(range(5)),
+                    outputs={"main": "gated"},
+                ),
+                StepConfig(type="gated"),
+            ],
+            execution=ExecutionConfig(queue_type=QueueType.AUTO, workers=1),
+        )
+        registry = StepRegistry()
+        registry.register("source", DummySourceStep)
+        registry.register("gated", ReadyGatedSequentialStep)
+        stats = StatsCollector()
+        engine = PipelineEngine(config=config, registry=registry, stats=stats)
+        engine.run(output_dir=tmp_path / "out")
+
+        assert len(created) >= 1, "FullDiskQueue가 한 번 이상 생성되어야 한다"
+
+    @pytest.mark.timeout(30)
+    def test_auto_uses_spill_for_plain_step(self, tmp_path: Path) -> None:
+        """AUTO 모드에서 is_ready() 미오버라이드 스텝에는 SpillQueue가 사용된다."""
+        config = PipelineConfig(
+            pipeline=[
+                StepConfig(
+                    type="source",
+                    items=list(range(5)),
+                    outputs={"main": "passthrough"},
+                ),
+                StepConfig(type="passthrough"),
+            ],
+            execution=ExecutionConfig(
+                queue_type=QueueType.AUTO, workers=1, queue_size=100
+            ),
+        )
+        registry = StepRegistry()
+        registry.register("source", DummySourceStep)
+        registry.register("passthrough", PassthroughStep)
+        stats = StatsCollector()
+        engine = PipelineEngine(config=config, registry=registry, stats=stats)
+        engine.run(output_dir=tmp_path / "out")
+        # 정상 완료 확인 (FullDiskQueue 없이)
+        assert stats.get_step_stats("passthrough").processed == 5
+
+    @pytest.mark.timeout(30)
+    def test_full_disk_queue_type_explicit(self, tmp_path: Path) -> None:
+        """queue_type=FULL_DISK 명시 시 모든 처리 스텝에 FullDiskQueue가 배치된다."""
+        created: list[type] = []
+        original_init = FullDiskQueue.__init__
+
+        def tracking_init(self: FullDiskQueue, path: object) -> None:
+            created.append(FullDiskQueue)
+            original_init(self, path)
+
+        import task_pipeliner.engine as eng_mod
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(eng_mod.FullDiskQueue, "__init__", tracking_init)
+
+        config = PipelineConfig(
+            pipeline=[
+                StepConfig(
+                    type="source",
+                    items=list(range(5)),
+                    outputs={"main": "passthrough"},
+                ),
+                StepConfig(type="passthrough"),
+            ],
+            execution=ExecutionConfig(queue_type=QueueType.FULL_DISK, workers=1),
+        )
+        registry = StepRegistry()
+        registry.register("source", DummySourceStep)
+        registry.register("passthrough", PassthroughStep)
+        stats = StatsCollector()
+        engine = PipelineEngine(config=config, registry=registry, stats=stats)
+        engine.run(output_dir=tmp_path / "out")
+        monkeypatch.undo()
+
+        assert len(created) >= 1

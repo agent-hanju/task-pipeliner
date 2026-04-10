@@ -87,6 +87,14 @@ class SourceStep(StepBase, ABC):
         """Yield items to feed into the pipeline."""
         ...
 
+    def item_key(self, item: Any) -> str | None:  # noqa: ARG002
+        """Return a unique string key for *item*, used for checkpoint deduplication.
+
+        Return ``None`` (default) to opt out of checkpointing for this item.
+        Override to enable resume-from-checkpoint support.
+        """
+        return None
+
 
 # ---------------------------------------------------------------------------
 # SequentialStep

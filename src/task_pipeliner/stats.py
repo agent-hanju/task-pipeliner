@@ -121,7 +121,8 @@ class StatsCollector:
         logger.debug("path=%s", path)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            data = [s.to_dict() for s in self._stats.values()]
+            with self._lock:
+                data = [s.to_dict() for s in self._stats.values()]
             tmp = path.with_suffix(".tmp")
             tmp.write_text(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False))
             os.replace(str(tmp), str(path))
