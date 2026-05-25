@@ -87,7 +87,7 @@ class DiskCacheCheckpointStore:
 
     def __init__(self, checkpoint_dir: Path, run_id: str) -> None:
         try:
-            import diskcache
+            import diskcache  # type: ignore[import-untyped]
         except ImportError as exc:
             raise ImportError(
                 "DiskCacheCheckpointStore requires the 'diskcache' package. "

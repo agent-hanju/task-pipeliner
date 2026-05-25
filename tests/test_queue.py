@@ -228,23 +228,6 @@ class TestBaseStepRunner:
         assert isinstance(out_q3.get(timeout=2), Sentinel)
 
     @pytest.mark.timeout(10)
-    def test_wait_until_is_ready_no_events_is_noop(self) -> None:
-        producer = self._make_producer(ready_events=None)
-        producer._wait_until_is_ready()
-
-    @pytest.mark.timeout(10)
-    def test_wait_until_is_ready_waits_on_events(self) -> None:
-        ctx = multiprocessing.get_context("spawn")
-        evt1 = ctx.Event()
-        evt2 = ctx.Event()
-        evt1.set()
-        evt2.set()
-
-        producer = self._make_producer(ready_events=[evt1, evt2])
-        # Both events already set — should return immediately
-        producer._wait_until_is_ready()
-
-    @pytest.mark.timeout(10)
     def test_base_producer_stores_attributes(self) -> None:
         ctx = multiprocessing.get_context("spawn")
         step = PassthroughStep()
@@ -252,7 +235,6 @@ class TestBaseStepRunner:
         out_q: multiprocessing.Queue[object] = ctx.Queue()
         stats = StatsCollector()
         stats.register("PassthroughStep")
-        state = {"key": "value"}
 
         producer = _DummyProducer(
             step=step,
@@ -260,14 +242,12 @@ class TestBaseStepRunner:
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-            state=state,
         )
         assert producer.step is step
         assert producer.step_name == "PassthroughStep"
         assert producer.input_queue is in_q
         assert producer.output_queues == {"main": [out_q]}
         assert producer.stats is stats
-        assert producer.state is state
 
     @pytest.mark.timeout(10)
     def test_make_emit_puts_item_into_output_queues(self) -> None:
@@ -341,7 +321,7 @@ class TestParallelWorker:
 
         # TerminalStep is sequential, but we can use a worker that does nothing
         class _NoopWorker:
-            def process(self, item: Any, state: Any, emit: Any) -> None:
+            def process(self, item: Any, emit: Any) -> None:
                 pass  # Terminal — no emit
 
         self._setup_worker(_NoopWorker())
@@ -369,7 +349,6 @@ class TestSequentialStepRunner:
         step: Any,
         items: list[Any],
         *,
-        state: Any = None,
         step_name: str | None = None,
     ) -> tuple[list[Any], StatsCollector]:
         """Helper: feed *items* into a SequentialStepRunner.run() and return
@@ -392,7 +371,6 @@ class TestSequentialStepRunner:
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-            state=state,
         )
         # Direct call — no subprocess
         producer.run()
@@ -522,7 +500,6 @@ class TestParallelStepRunner:
         *,
         workers: int = 2,
         chunk_size: int = 10,
-        state: Any = None,
         step_name: str | None = None,
     ) -> tuple[list[Any], StatsCollector]:
         """Helper: feed *items* into a ParallelStepRunner.run() and return
@@ -545,7 +522,6 @@ class TestParallelStepRunner:
             input_queue=in_q,
             output_queues={"main": [out_q]},
             stats=stats,
-            state=state,
             workers=workers,
             chunk_size=chunk_size,
         )
@@ -692,7 +668,7 @@ class TestTaggedEmitRouting:
         )
         emit = producer._make_emit()
 
-        with pytest.raises(RuntimeError, match="no declared outputs"):
+        with pytest.raises(RuntimeError, match="no output queues"):
             emit("item", "any_tag")
 
     @pytest.mark.timeout(10)

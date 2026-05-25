@@ -9,16 +9,13 @@ from pathlib import Path
 from dummy_steps import DummySourceStep, FilterEvenStep, PassthroughStep, SlowStep
 
 from task_pipeliner.config import ExecutionConfig, PipelineConfig, StepConfig
-from task_pipeliner.engine import PipelineEngine
-from task_pipeliner.pipeline import StepRegistry
-from task_pipeliner.stats import StatsCollector
+from task_pipeliner.pipeline import Pipeline
 
 
 def main() -> None:
     output_dir = Path(sys.argv[1])
     mode = sys.argv[2] if len(sys.argv) > 2 else "slow"
 
-    # Set up file logging
     log_path = output_dir / "pipeline.log"
     output_dir.mkdir(parents=True, exist_ok=True)
     handler = logging.FileHandler(str(log_path), encoding="utf-8")
@@ -31,11 +28,11 @@ def main() -> None:
     root.addHandler(handler)
     root.setLevel(logging.DEBUG)
 
-    registry = StepRegistry()
-    registry.register("source", DummySourceStep)
-    registry.register("slow", SlowStep)
-    registry.register("passthrough", PassthroughStep)
-    registry.register("filter_even", FilterEvenStep)
+    p = Pipeline()
+    p.register("source", DummySourceStep)
+    p.register("slow", SlowStep)
+    p.register("passthrough", PassthroughStep)
+    p.register("filter_even", FilterEvenStep)
 
     if mode == "slow":
         config = PipelineConfig(
@@ -62,10 +59,7 @@ def main() -> None:
             execution=ExecutionConfig(workers=1, queue_size=100, chunk_size=50),
         )
 
-    stats = StatsCollector()
-    engine = PipelineEngine(config=config, registry=registry, stats=stats)
-
-    engine.run(output_dir=output_dir)
+    p.run(config=config, output_dir=output_dir)
 
 
 if __name__ == "__main__":

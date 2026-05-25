@@ -76,52 +76,25 @@ class TestConfigValidationError:
 class TestStepBase:
     """Tests for shared StepBase functionality."""
 
-    def test_outputs_defaults_to_empty_tuple(self) -> None:
-        class MyStep(SequentialStep):
-            def process(self, item: Any, state: Any, emit: Any) -> None:
-                pass
-
-        assert MyStep.outputs == ()
-        assert MyStep().outputs == ()
-
     def test_outputs_can_be_declared(self) -> None:
         class MyStep(SequentialStep):
             outputs = ("kept", "removed")
 
-            def process(self, item: Any, state: Any, emit: Any) -> None:
+            def process(self, item: Any, emit: Any) -> None:
                 pass
 
         assert MyStep.outputs == ("kept", "removed")
 
-    def test_initial_state_defaults_to_none(self) -> None:
-        class MyStep(SequentialStep):
-            def process(self, item: Any, state: Any, emit: Any) -> None:
-                pass
-
-        assert MyStep().initial_state is None
-
-    def test_initial_state_override(self) -> None:
-        class MyStep(SequentialStep):
-            @property
-            def initial_state(self) -> dict[str, int]:
-                return {"count": 0}
-
-            def process(self, item: Any, state: Any, emit: Any) -> None:
-                pass
-
-        step = MyStep()
-        assert step.initial_state == {"count": 0}
-
     def test_open_is_noop_by_default(self) -> None:
         class MyStep(SequentialStep):
-            def process(self, item: Any, state: Any, emit: Any) -> None:
+            def process(self, item: Any, emit: Any) -> None:
                 pass
 
         MyStep().open()  # should not raise
 
     def test_close_is_noop_by_default(self) -> None:
         class MyStep(SequentialStep):
-            def process(self, item: Any, state: Any, emit: Any) -> None:
+            def process(self, item: Any, emit: Any) -> None:
                 pass
 
         MyStep().close()  # should not raise
@@ -135,7 +108,7 @@ class TestStepBase:
             def open(self) -> None:
                 self.opened = True
 
-            def process(self, item: Any, state: Any, emit: Any) -> None:
+            def process(self, item: Any, emit: Any) -> None:
                 pass
 
             def close(self) -> None:
@@ -176,11 +149,11 @@ class TestSequentialStep:
         class MyStep(SequentialStep):
             outputs = ("out",)
 
-            def process(self, item: Any, state: Any, emit: Any) -> None:
+            def process(self, item: Any, emit: Any) -> None:
                 emit(item, "out")
 
         step = MyStep()
-        step.process("hello", None, lambda i, t: collected.append((i, t)))
+        step.process("hello", lambda i, t: collected.append((i, t)))
         assert collected == [("hello", "out")]
 
 
@@ -192,7 +165,7 @@ class TestWorker:
     def test_open_close_noop_by_default(self) -> None:
         class MyWorker(Worker):
             def process(
-                self, item: Any, state: Any, emit: Callable[[Any, str], None]
+                self, item: Any, emit: Callable[[Any, str], None]
             ) -> None:
                 pass
 
@@ -209,7 +182,7 @@ class TestParallelStep:
     def test_create_worker_returns_worker(self) -> None:
         class MyWorker(Worker):
             def process(
-                self, item: Any, state: Any, emit: Callable[[Any, str], None]
+                self, item: Any, emit: Callable[[Any, str], None]
             ) -> None:
                 emit(item, "main")
 

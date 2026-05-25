@@ -7,13 +7,11 @@ import atexit
 import logging
 import multiprocessing
 import pickle
-import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from multiprocessing.synchronize import Event
 from typing import Any, Protocol, runtime_checkable
 
 from task_pipeliner.base import AsyncStep, ParallelStep, SequentialStep, SourceStep, StepBase
@@ -175,11 +173,7 @@ class BaseStepRunner(ABC):
         input_queue: QueueLike,
         output_queues: dict[str, list[QueueLike]],
         stats: StatsCollector,
-        state: Any = None,
         sentinel_count: int = 1,
-        ready_events: list[Event] | None = None,
-        state_changed_event: threading.Event | None = None,
-        state_dispatch: Callable[[str, Any], None] | None = None,
     ) -> None:
         logger.debug(
             "step=%s output_queues=%d tags sentinel_count=%d",
@@ -192,30 +186,27 @@ class BaseStepRunner(ABC):
         self.input_queue = input_queue
         self.output_queues = output_queues
         self.stats = stats
-        self.state = state
         self.sentinel_count = sentinel_count
-        self.ready_events = ready_events
-        self.state_changed_event = state_changed_event or threading.Event()
-        self.state_dispatch = state_dispatch
 
     # -- helpers -------------------------------------------------------------
 
     def _make_emit(self) -> Callable[[Any, str], None]:
         """Return a callback that routes an item to the queues for the given tag.
 
-        - ``outputs = ()`` → emit raises ``RuntimeError``
-        - unconnected tag → silent drop (DEBUG log)
+        - outputs=() declared terminal step → emit raises RuntimeError
+        - unconnected tag (or no downstream at all) → silent drop (DEBUG log)
         - connected tag → put into each queue for that tag
         """
         queues_by_tag = self.output_queues
         step_name = self.step_name
-        step_outputs = self.step.outputs
         stats = self.stats
+        declared_outputs = getattr(self.step, "outputs", None)
+        is_declared_terminal = declared_outputs is not None and len(declared_outputs) == 0
 
         def emit(item: Any, tag: str) -> None:
-            if not step_outputs:
+            if is_declared_terminal:
                 raise RuntimeError(
-                    f"Step '{step_name}' has no declared outputs — emit() not allowed"
+                    f"Step '{step_name}' has no output queues — emit() not allowed"
                 )
             tag_queues = queues_by_tag.get(tag)
             if tag_queues is None:
@@ -226,20 +217,6 @@ class BaseStepRunner(ABC):
             stats.increment_emitted(step_name, tag)
 
         return emit
-
-    def _wait_until_is_ready(self) -> None:
-        """Block until ready_events are set AND step.is_ready(state) is True."""
-        if self.ready_events is not None:
-            logger.debug("waiting on %d ready events", len(self.ready_events))
-            for evt in self.ready_events:
-                evt.wait()
-            logger.debug("all ready events set")
-        while not self.step.is_ready(self.state):
-            self.stats.set_state(self.step_name, "waiting_for_state")
-            logger.debug("is_ready=False step=%s, waiting", self.step_name)
-            self.state_changed_event.wait(timeout=5)
-            self.state_changed_event.clear()
-        logger.debug("is_ready=True step=%s", self.step_name)
 
     def _send_sentinel(self) -> None:
         """Put a Sentinel into each unique output queue across all tags."""
@@ -256,14 +233,6 @@ class BaseStepRunner(ABC):
             len(seen),
             self.step_name,
         )
-
-    def _dispatch_output_state(self) -> None:
-        """Call step.get_output_state() and dispatch results via state_dispatch."""
-        output_state = self.step.get_output_state()
-        if output_state is None or self.state_dispatch is None:
-            return
-        for target_name, state_value in output_state.items():
-            self.state_dispatch(target_name, state_value)
 
     @abstractmethod
     def run(self) -> None: ...
@@ -284,7 +253,6 @@ class SequentialStepRunner(BaseStepRunner):
         first_item_recorded = False
         sentinel_remaining = self.sentinel_count
         try:
-            self._wait_until_is_ready()
             self.step.open()
             emit = self._make_emit()
             self.stats.set_state(self.step_name, "idle")
@@ -317,7 +285,7 @@ class SequentialStepRunner(BaseStepRunner):
                 self.stats.set_state(self.step_name, "processing")
                 try:
                     proc_start = time.monotonic_ns()
-                    self.step.process(item, self.state, emit)
+                    self.step.process(item, emit)
                     proc_ns = time.monotonic_ns() - proc_start
                     self.stats.add_processing_ns(self.step_name, proc_ns)
                     self.stats.increment(self.step_name, "processed")
@@ -333,7 +301,6 @@ class SequentialStepRunner(BaseStepRunner):
         finally:
             self._send_sentinel()
             self.step.close()
-            self._dispatch_output_state()
             self.stats.set_state(self.step_name, "done")
             self.stats.finish(self.step_name)
             logger.info("step runner finished step=%s", self.step_name)
@@ -357,16 +324,14 @@ class ChunkResult:
     processing_ns: int = 0
 
 
-# Process-global worker state (set by _worker_init in each worker process)
+# Process-global worker instance (set by _worker_init in each worker process)
 _worker_instance: Any = None
-_worker_state: Any = None
 
 
-def _worker_init(worker_bytes: bytes, state: Any) -> None:
+def _worker_init(worker_bytes: bytes) -> None:
     """Initializer for worker processes: deserialize Worker and call open()."""
-    global _worker_instance, _worker_state  # noqa: PLW0603
+    global _worker_instance  # noqa: PLW0603
     _worker_instance = pickle.loads(worker_bytes)  # noqa: S301
-    _worker_state = state
     _worker_instance.open()
     atexit.register(_worker_finalize)
 
@@ -385,12 +350,11 @@ def _worker_finalize() -> None:
 def _parallel_worker(chunk: list[Any], step_name: str) -> ChunkResult:
     """Process a chunk of items in a worker process.
 
-    Uses the process-global ``_worker_instance`` and ``_worker_state``
-    set up by ``_worker_init``.  Items are collected in memory and
-    returned to the step runner, which puts them into output queues.
+    Uses the process-global ``_worker_instance`` set up by ``_worker_init``.
+    Items are collected in memory and returned to the step runner,
+    which puts them into output queues.
     """
     worker = _worker_instance
-    state = _worker_state
     result = ChunkResult()
     emitted: dict[str, list[Any]] = {}
 
@@ -400,7 +364,7 @@ def _parallel_worker(chunk: list[Any], step_name: str) -> ChunkResult:
     for item in chunk:
         try:
             t0 = time.monotonic_ns()
-            worker.process(item, state, _collect_emit)
+            worker.process(item, _collect_emit)
             result.processing_ns += time.monotonic_ns() - t0
             result.processed += 1
         except Exception:
@@ -469,8 +433,6 @@ class ParallelStepRunner(BaseStepRunner):
         sentinel_remaining = self.sentinel_count
         ctx = multiprocessing.get_context("spawn")
         try:
-            self._wait_until_is_ready()
-
             # Create and pickle worker before step.open() so the worker
             # doesn't capture any unpicklable main-process resources.
             worker = self.step.create_worker()
@@ -484,7 +446,7 @@ class ParallelStepRunner(BaseStepRunner):
                 max_workers=self.workers,
                 mp_context=ctx,
                 initializer=_worker_init,
-                initargs=(worker_bytes, self.state),
+                initargs=(worker_bytes,),
             )
             try:
                 chunk: list[Any] = []
@@ -555,7 +517,6 @@ class ParallelStepRunner(BaseStepRunner):
                 executor.shutdown(wait=True)
         finally:
             self.step.close()
-            self._dispatch_output_state()
             self.stats.set_state(self.step_name, "done")
             logger.info("step runner finished step=%s", self.step_name)
 
@@ -589,7 +550,7 @@ class AsyncStepRunner(BaseStepRunner):
         async with sem:
             try:
                 proc_start = time.monotonic_ns()
-                await self.step.process_async(item, self.state, emit)
+                await self.step.process_async(item, emit)
                 proc_ns = time.monotonic_ns() - proc_start
                 self.stats.add_processing_ns(self.step_name, proc_ns)
                 self.stats.increment(self.step_name, "processed")
@@ -651,14 +612,11 @@ class AsyncStepRunner(BaseStepRunner):
             self.stats.finish(self.step_name)
         finally:
             self.step.close()
-            self._dispatch_output_state()
             self.stats.set_state(self.step_name, "done")
             logger.info("async step runner finished step=%s", self.step_name)
 
     def run(self) -> None:
         logger.debug("run started step=%s", self.step_name)
-        # _wait_until_is_ready() blocks via threading.Event — call before asyncio.run().
-        self._wait_until_is_ready()
         asyncio.run(self._run_async())
 
 

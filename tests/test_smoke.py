@@ -14,16 +14,12 @@ from pathlib import Path
 import pytest
 
 from task_pipeliner.config import ExecutionConfig, PipelineConfig, QueueType, StepConfig
-from task_pipeliner.engine import PipelineEngine
-from task_pipeliner.pipeline import StepRegistry
-from task_pipeliner.stats import StatsCollector
+from task_pipeliner.pipeline import Pipeline
 
 from .dummy_steps import (
     DummySourceStep,
     FilterEvenStep,
     PassthroughStep,
-    ReadyGatedSequentialStep,
-    SequentialFilterEvenStep,
     SequentialPassthroughStep,
 )
 
@@ -38,28 +34,18 @@ def test_multi_step_spill_queue(tmp_path: Path) -> None:
     items = list(range(20))
     config = PipelineConfig(
         pipeline=[
-            StepConfig(
-                type="source",
-                items=items,
-                outputs={"main": "filter"},
-            ),
-            StepConfig(
-                type="filter",
-                outputs={"main": "passthrough"},
-            ),
+            StepConfig(type="source", items=items, outputs={"main": "filter"}),
+            StepConfig(type="filter", outputs={"main": "passthrough"}),
             StepConfig(type="passthrough"),
         ],
         execution=ExecutionConfig(workers=2, queue_size=50),
     )
-    registry = StepRegistry()
-    registry.register("source", DummySourceStep)
-    registry.register("filter", FilterEvenStep)
-    registry.register("passthrough", PassthroughStep)
-    stats = StatsCollector()
-    engine = PipelineEngine(config=config, registry=registry, stats=stats)
-    engine.run(output_dir=tmp_path / "out")
+    p = Pipeline()
+    p.register("source", DummySourceStep)
+    p.register("filter", FilterEvenStep)
+    p.register("passthrough", PassthroughStep)
+    stats = p.run(config=config, output_dir=tmp_path / "out")
 
-    # 짝수 10개가 passthrough까지 도달해야 함
     assert stats.get_step_stats("passthrough").processed == 10
 
 
@@ -74,12 +60,10 @@ def test_stats_json_written(tmp_path: Path) -> None:
         ],
         execution=ExecutionConfig(workers=1),
     )
-    registry = StepRegistry()
-    registry.register("source", DummySourceStep)
-    registry.register("passthrough", SequentialPassthroughStep)
-    stats = StatsCollector()
-    engine = PipelineEngine(config=config, registry=registry, stats=stats)
-    engine.run(output_dir=out)
+    p = Pipeline()
+    p.register("source", DummySourceStep)
+    p.register("passthrough", SequentialPassthroughStep)
+    p.run(config=config, output_dir=out)
 
     stats_file = out / "stats.json"
     assert stats_file.exists(), "stats.json 파일이 생성되어야 한다"
@@ -105,32 +89,11 @@ def test_full_disk_queue_pipeline(tmp_path: Path) -> None:
         ],
         execution=ExecutionConfig(queue_type=QueueType.FULL_DISK, workers=1),
     )
-    registry = StepRegistry()
-    registry.register("source", DummySourceStep)
-    registry.register("passthrough", SequentialPassthroughStep)
-    stats = StatsCollector()
-    engine = PipelineEngine(config=config, registry=registry, stats=stats)
-    engine.run(output_dir=tmp_path / "out")
+    p = Pipeline()
+    p.register("source", DummySourceStep)
+    p.register("passthrough", SequentialPassthroughStep)
+    stats = p.run(config=config, output_dir=tmp_path / "out")
 
     assert stats.get_step_stats("passthrough").processed == 30
 
 
-@pytest.mark.timeout(60)
-def test_auto_queue_is_ready_pipeline(tmp_path: Path) -> None:
-    """AUTO 모드 + is_ready() 오버라이드 스텝 포함 파이프라인 — 데이터 손실 없음."""
-    items = list(range(15))
-    config = PipelineConfig(
-        pipeline=[
-            StepConfig(type="source", items=items, outputs={"main": "gated"}),
-            StepConfig(type="gated"),
-        ],
-        execution=ExecutionConfig(queue_type=QueueType.AUTO, workers=1),
-    )
-    registry = StepRegistry()
-    registry.register("source", DummySourceStep)
-    registry.register("gated", ReadyGatedSequentialStep)
-    stats = StatsCollector()
-    engine = PipelineEngine(config=config, registry=registry, stats=stats)
-    engine.run(output_dir=tmp_path / "out")
-
-    assert stats.get_step_stats("gated").processed == 15

@@ -12,9 +12,9 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from task_pipeliner.base import AsyncStep, ParallelStep, SequentialStep, SourceStep, StepBase
+from task_pipeliner.base import AsyncStep, ParallelStep, SourceStep, StepBase
 from task_pipeliner.checkpoint import make_checkpoint_store
-from task_pipeliner.config import PipelineConfig, QueueType
+from task_pipeliner.config import QueueType
 from task_pipeliner.exceptions import ConfigValidationError
 from task_pipeliner.progress import ProgressReporter
 from task_pipeliner.spill_queue import FullDiskQueue, SpillQueue
@@ -29,7 +29,7 @@ from task_pipeliner.step_runners import (
 )
 
 if TYPE_CHECKING:
-    from task_pipeliner.pipeline import StepRegistry
+    from task_pipeliner.pipeline import _StepGraph
 
 logger = logging.getLogger(__name__)
 
@@ -40,22 +40,19 @@ logger = logging.getLogger(__name__)
 
 
 class PipelineEngine:
-    """config에 따라 DAG 큐 토폴로지를 구성하고, StepRunner들을 생성·실행·정리한다."""
+    """graph에 따라 DAG 큐 토폴로지를 구성하고, StepRunner들을 생성·실행·정리한다."""
 
     def __init__(
         self,
         *,
-        config: PipelineConfig,
-        registry: StepRegistry,
+        graph: _StepGraph,
         stats: StatsCollector,
     ) -> None:
         logger.debug(
-            "config steps=%d registry=%d",
-            len(config.pipeline),
-            len(registry),
+            "graph nodes=%d",
+            len(graph.nodes),
         )
-        self.config = config
-        self.registry = registry
+        self.graph = graph
         self.stats = stats
 
     def run(
@@ -73,41 +70,31 @@ class PipelineEngine:
         5) 결과 수집 + stats 저장
         """
         logger.info(
-            "pipeline started steps=%d workers=%d",
-            len(self.config.pipeline),
-            self.config.execution.workers,
+            "pipeline started nodes=%d workers=%d",
+            len(self.graph.nodes),
+            self.graph.execution.workers,
         )
         # checkpoint 초기화 — checkpoint_dir 미설정 시 NullCheckpointStore (no-op)
-        run_id = self.config.resume_run_id or str(uuid.uuid4())
-        checkpoint = make_checkpoint_store(self.config.checkpoint_dir, run_id)
+        run_id = self.graph.resume_run_id or str(uuid.uuid4())
+        checkpoint = make_checkpoint_store(self.graph.checkpoint_dir, run_id)
         logger.info("run_id=%s checkpoint=%s", run_id, type(checkpoint).__name__)
 
         # spawn 모드 컨텍스트 — Windows 호환을 위해 fork 대신 spawn 사용
         ctx = multiprocessing.get_context("spawn")
 
         # ======================================================================
-        # 1단계: Step 인스턴스 생성 + SOURCE 배치 검증
+        # 1단계: graph.nodes 검증 + instance 맵 구성
         # ======================================================================
 
-        # enabled된 step config만 필터링
-        enabled_cfgs = [s for s in self.config.pipeline if s.enabled]
-        if not enabled_cfgs:
-            logger.info("no enabled steps — nothing to do")
+        nodes = self.graph.nodes
+        if not nodes:
+            logger.info("no nodes in graph — nothing to do")
             return
 
-        # config의 type 이름으로 registry에서 클래스를 찾아 인스턴스화
-        # StepConfig의 extra 필드들이 Step.__init__의 kwargs로 전달됨
-        # step_cfg.name이 인스턴스 고유 키 (생략 시 type과 동일)
-        instance_by_name: dict[str, StepBase] = {}
-        for step_cfg in enabled_cfgs:
-            cls = self.registry.get(step_cfg.type)
-            extra = step_cfg.model_extra or {}
-            step = cls(**extra)
-            instance_by_name[step_cfg.name] = step
+        instance_by_name: dict[str, StepBase] = {name: step for name, step in nodes}
 
         # 첫 번째 step은 반드시 SOURCE여야 함
-        source_name = enabled_cfgs[0].name
-        source_step = instance_by_name[source_name]
+        source_name, source_step = nodes[0]
 
         if not isinstance(source_step, SourceStep):
             raise ConfigValidationError(
@@ -115,8 +102,7 @@ class PipelineEngine:
                 field="pipeline",
             )
         # 두 번째 이후에 SourceStep이 있으면 에러
-        for step_cfg in enabled_cfgs[1:]:
-            step = instance_by_name[step_cfg.name]
+        for _, step in nodes[1:]:
             if isinstance(step, SourceStep):
                 raise ConfigValidationError(
                     "SourceStep must be the first step in the pipeline",
@@ -143,7 +129,7 @@ class PipelineEngine:
         # output_queues_map[step_name][tag] = [큐들]  (한 태그가 여러 step으로 fan-out 가능)
 
         # SOURCE를 제외한 나머지 step들 (처리 대상)
-        processing_names = [cfg.name for cfg in enabled_cfgs if cfg.name != source_name]
+        processing_names = [name for name, _ in nodes if name != source_name]
 
         output_queues_map: dict[str, dict[str, list[QueueLike]]] = {
             n: {} for n in instance_by_name
@@ -151,28 +137,19 @@ class PipelineEngine:
 
         # 각 처리 step에 하나의 공유 입력 큐를 생성
         # queue_type에 따라 FullDiskQueue / SpillQueue / multiprocessing.Queue 선택.
-        queue_size = self.config.execution.queue_size
-        queue_type = self.config.execution.queue_type
+        queue_size = self.graph.execution.queue_size
+        queue_type = self.graph.execution.queue_type
         # FullDiskQueue 인스턴스가 하나라도 생기면 tmpdir이 필요함 (파이프라인 종료 시 삭제)
         _disk_tmpdir: str | None = None
         input_queue_for: dict[str, QueueLike] = {}
         all_queues: list[QueueLike] = []
         for step_name in processing_names:
-            step = instance_by_name[step_name]
-            use_disk = (
-                queue_type == QueueType.FULL_DISK
-                or (
-                    queue_type == QueueType.AUTO
-                    and isinstance(step, SequentialStep)
-                    and type(step).is_ready is not StepBase.is_ready
-                )
-            )
             q: QueueLike
-            if use_disk:
+            if queue_type == QueueType.FULL_DISK:
                 if _disk_tmpdir is None:
                     _disk_tmpdir = tempfile.mkdtemp(prefix="task_pipeliner_queue_")
                 q = FullDiskQueue(Path(_disk_tmpdir) / step_name)
-                logger.info("step '%s' using FullDiskQueue (is_ready override detected)", step_name)
+                logger.info("step '%s' using FullDiskQueue", step_name)
             elif queue_size > 0:
                 q = SpillQueue(maxmem=queue_size)
             else:
@@ -186,25 +163,21 @@ class PipelineEngine:
         # 각 target에 도착할 sentinel 개수 (= 고유 upstream step 수)
         sentinel_count_for: dict[str, int] = {n: 0 for n in processing_names}
 
-        for step_cfg in enabled_cfgs:
-            if step_cfg.outputs is None:
-                continue
-            # 이 step에서 연결되는 target을 추적 (sentinel 카운팅용)
+        for step_name, _ in nodes:
+            step_conns = self.graph.connections.get(step_name, {})
             targets_from_this_step: set[str] = set()
-            for tag, targets in step_cfg.outputs.items():
-                # targets는 "StepB" (str) 또는 ["StepB", "StepC"] (list) 형태
-                target_list = [targets] if isinstance(targets, str) else targets
-                for target_name in target_list:
+            for tag, target_names in step_conns.items():
+                for target_name in target_names:
                     if target_name not in instance_by_name:
-                        # disabled된 step을 가리키면 무시
                         logger.debug(
-                            "output target '%s' not in enabled steps — skipped",
+                            "output target '%s' not in graph nodes — skipped",
                             target_name,
                         )
                         continue
-                    q = input_queue_for[target_name]
-                    output_queues_map[step_cfg.name].setdefault(tag, []).append(q)
-                    targets_from_this_step.add(target_name)
+                    target_q = input_queue_for.get(target_name)
+                    if target_q is not None:
+                        output_queues_map[step_name].setdefault(tag, []).append(target_q)
+                        targets_from_this_step.add(target_name)
             for target_name in targets_from_this_step:
                 sentinel_count_for[target_name] += 1
 
@@ -228,34 +201,12 @@ class PipelineEngine:
         )
 
         # 나머지 step들의 StepRunner 생성
-        #
-        # state_dispatch 콜백: StepRunner가 step.close() 후 get_output_state()를
-        # 호출하고, 반환된 {target_name: state} 매핑을 이 콜백으로 dispatch한다.
-        # runner_by_name / state_events를 클로저로 캡처하므로,
-        # StepRunner 생성 후에도 새로 추가된 StepRunner를 참조할 수 있다.
         runners: list[SequentialStepRunner | ParallelStepRunner | AsyncStepRunner] = []
-        runner_by_name: dict[str, SequentialStepRunner | ParallelStepRunner | AsyncStepRunner] = {}
-        state_events: dict[str, threading.Event] = {}
-
-        def _state_dispatch(target_name: str, state: Any) -> None:
-            target = runner_by_name.get(target_name)
-            if target is None:
-                raise ValueError(
-                    f"state dispatch target '{target_name}' not found. "
-                    f"Available: {sorted(runner_by_name.keys())}"
-                )
-            target.state = state
-            target_evt = state_events.get(target_name)
-            if target_evt is not None:
-                target_evt.set()
-            logger.info("state dispatched to %s", target_name)
 
         for step_name in processing_names:
             step = instance_by_name[step_name]
             in_q = input_queue_for[step_name]
             out_qs = output_queues_map[step_name]
-            evt = threading.Event()
-            state_events[step_name] = evt
 
             # ParallelStep → ProcessPoolExecutor 기반 ParallelStepRunner
             # AsyncStep   → asyncio 이벤트 루프 기반 AsyncStepRunner
@@ -269,12 +220,9 @@ class PipelineEngine:
                     input_queue=in_q,
                     output_queues=out_qs,
                     stats=self.stats,
-                    state=step.initial_state,
                     sentinel_count=sc,
-                    workers=self.config.execution.workers,
-                    chunk_size=self.config.execution.chunk_size,
-                    state_changed_event=evt,
-                    state_dispatch=_state_dispatch,
+                    workers=self.graph.execution.workers,
+                    chunk_size=self.graph.execution.chunk_size,
                 )
             elif isinstance(step, AsyncStep):
                 p = AsyncStepRunner(
@@ -283,10 +231,7 @@ class PipelineEngine:
                     input_queue=in_q,
                     output_queues=out_qs,
                     stats=self.stats,
-                    state=step.initial_state,
                     sentinel_count=sc,
-                    state_changed_event=evt,
-                    state_dispatch=_state_dispatch,
                 )
             else:
                 p = SequentialStepRunner(
@@ -295,13 +240,9 @@ class PipelineEngine:
                     input_queue=in_q,
                     output_queues=out_qs,
                     stats=self.stats,
-                    state=step.initial_state,
                     sentinel_count=sc,
-                    state_changed_event=evt,
-                    state_dispatch=_state_dispatch,
                 )
             runners.append(p)
-            runner_by_name[step_name] = p
 
         logger.debug("built %d step runners", len(runners))
 
@@ -310,7 +251,7 @@ class PipelineEngine:
         # ======================================================================
 
         # 진행률 표시에 사용할 step 이름 목록
-        step_names = [cfg.name for cfg in enabled_cfgs]
+        step_names = [name for name, _ in nodes]
         # InputStepRunner는 별도 스레드에서 실행
         feeder = threading.Thread(target=input_runner.run, daemon=True)
         # 각 StepRunner도 별도 스레드에서 실행

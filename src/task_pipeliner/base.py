@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
-from typing import Any, ClassVar
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # StepBase — shared infrastructure (private)
@@ -18,45 +18,25 @@ class StepBase:
     ``SequentialStep``, or ``ParallelStep`` instead.
     """
 
-    outputs: ClassVar[tuple[str, ...]] = ()
-    """Declared output tags. Empty tuple ``()`` means terminal step (emit not allowed)."""
+    def pipe(self, step: StepBase, tag: str = "main") -> StepBase:
+        """Connect this step's output *tag* to *step*.
 
-    @property
-    def initial_state(self) -> Any:
-        """Return the initial state object for this step.
+        Returns *step* to allow chaining::
 
-        Override in subclasses that need mutable state passed to process().
-        The returned object is passed as the ``state`` argument to every
-        ``process()`` call.  For SEQUENTIAL steps, it is the same object
-        across all calls (accumulated in-place).
+            source.pipe(filter_step).pipe(writer_step)
+
+        Multiple calls with the same tag fan-out to multiple targets.
         """
-        return None
-
-    def is_ready(self, state: Any) -> bool:
-        """Return True if this step is ready to process items.
-
-        Override in subclasses to gate processing on state availability.
-        When False, the producer will not call process() even if items
-        are queued — it stays idle until a state change triggers
-        re-evaluation.  Default returns True (always ready).
-        """
-        return True
-
-    def get_output_state(self) -> dict[str, Any] | None:
-        """Return state to dispatch to other steps after processing completes.
-
-        Override in subclasses that need to push state to other steps.
-        Called by the Producer after ``close()``.  Return a mapping of
-        ``{target_step_name: state_value}`` or ``None`` if no state
-        dispatch is needed.
-        """
-        return None
+        if "_connections" not in self.__dict__:
+            self.__dict__["_connections"] = {}
+        self.__dict__["_connections"].setdefault(tag, []).append(step)
+        return step
 
     def open(self) -> None:
         """Acquire resources on the main process before processing begins.
 
-        Called once per execution, after ``is_ready()`` passes and before
-        the first ``process()`` call.  Paired with ``close()``.
+        Called once per execution before the first ``process()`` call.
+        Paired with ``close()``.
 
         Typical use: opening file handles, database connections, or
         temporary directories that should not be created at ``__init__``
@@ -108,7 +88,7 @@ class SequentialStep(StepBase, ABC):
     """
 
     @abstractmethod
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
+    def process(self, item: Any, emit: Callable[[Any, str], None]) -> None:
         """Process a single item.
 
         *emit(item, tag)* — callback provided by the Producer to forward
@@ -148,7 +128,7 @@ class AsyncStep(StepBase, ABC):
 
     @abstractmethod
     async def process_async(
-        self, item: Any, state: Any, emit: Callable[[Any, str], None]
+        self, item: Any, emit: Callable[[Any, str], None]
     ) -> None:
         """Process a single item asynchronously.
 
@@ -157,13 +137,6 @@ class AsyncStep(StepBase, ABC):
 
         ``outputs = ()`` steps (terminal) must NOT call emit —
         doing so raises ``RuntimeError``.
-
-        **Warning — state is shared across concurrent coroutines.**
-        Multiple ``process_async()`` calls run concurrently (up to
-        ``concurrency``).  Do NOT mutate ``state`` inside this method —
-        concurrent writes are not protected by any lock and will cause data
-        corruption.  If you need stateful accumulation, use
-        ``SequentialStep`` instead.
         """
         ...
 
@@ -182,7 +155,7 @@ class Worker(ABC):
     """
 
     @abstractmethod
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
+    def process(self, item: Any, emit: Callable[[Any, str], None]) -> None:
         """Process a single item in a worker process."""
         ...
 

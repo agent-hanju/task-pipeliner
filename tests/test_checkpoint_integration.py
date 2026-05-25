@@ -14,20 +14,19 @@ import pytest
 
 from task_pipeliner.checkpoint import DiskCacheCheckpointStore
 from task_pipeliner.config import ExecutionConfig, PipelineConfig, StepConfig
-from task_pipeliner.engine import PipelineEngine
-from task_pipeliner.pipeline import StepRegistry
+from task_pipeliner.pipeline import Pipeline
 from task_pipeliner.stats import StatsCollector
 
 from .dummy_steps import KeyedSourceStep, SequentialPassthroughStep
 
 
-def _make_engine(
+def _run_with_checkpoint(
     items: list[int],
     checkpoint_dir: Path,
     run_id: str,
-    *,
     tmp_path: Path,
-) -> tuple[PipelineEngine, StatsCollector]:
+    out_suffix: str = "out",
+) -> StatsCollector:
     config = PipelineConfig(
         pipeline=[
             StepConfig(type="source", items=items, outputs={"main": "passthrough"}),
@@ -37,12 +36,10 @@ def _make_engine(
         checkpoint_dir=checkpoint_dir,
         resume_run_id=run_id,
     )
-    registry = StepRegistry()
-    registry.register("source", KeyedSourceStep)
-    registry.register("passthrough", SequentialPassthroughStep)
-    stats = StatsCollector()
-    engine = PipelineEngine(config=config, registry=registry, stats=stats)
-    return engine, stats
+    p = Pipeline()
+    p.register("source", KeyedSourceStep)
+    p.register("passthrough", SequentialPassthroughStep)
+    return p.run(config=config, output_dir=tmp_path / out_suffix)
 
 
 @pytest.mark.timeout(30)
@@ -52,19 +49,11 @@ def test_second_run_skips_all_items(tmp_path: Path) -> None:
     checkpoint_dir = tmp_path / "checkpoints"
     run_id = "test-run-1"
 
-    # 첫 번째 실행
-    engine1, stats1 = _make_engine(items, checkpoint_dir, run_id, tmp_path=tmp_path)
-    engine1.run(output_dir=tmp_path / "out1")
-    source_stats1 = stats1.get_step_stats("source")
-    assert source_stats1 is not None
-    assert source_stats1.processed == 10
+    stats1 = _run_with_checkpoint(items, checkpoint_dir, run_id, tmp_path, "out1")
+    assert stats1.get_step_stats("source").processed == 10
 
-    # 두 번째 실행 — 모두 스킵되어야 함
-    engine2, stats2 = _make_engine(items, checkpoint_dir, run_id, tmp_path=tmp_path)
-    engine2.run(output_dir=tmp_path / "out2")
-    source_stats2 = stats2.get_step_stats("source")
-    assert source_stats2 is not None
-    assert source_stats2.processed == 0
+    stats2 = _run_with_checkpoint(items, checkpoint_dir, run_id, tmp_path, "out2")
+    assert stats2.get_step_stats("source").processed == 0
 
 
 @pytest.mark.timeout(30)
@@ -80,11 +69,8 @@ def test_partial_checkpoint_resumes_remaining(tmp_path: Path) -> None:
         pre_store.mark_done(str(i))
     pre_store.close()
 
-    engine, stats = _make_engine(items, checkpoint_dir, run_id, tmp_path=tmp_path)
-    engine.run(output_dir=tmp_path / "out")
-    source_stats = stats.get_step_stats("source")
-    assert source_stats is not None
-    assert source_stats.processed == 5  # 나머지 5개만 처리
+    stats = _run_with_checkpoint(items, checkpoint_dir, run_id, tmp_path)
+    assert stats.get_step_stats("source").processed == 5
 
 
 @pytest.mark.timeout(30)
@@ -93,13 +79,7 @@ def test_different_run_id_processes_all(tmp_path: Path) -> None:
     items = list(range(5))
     checkpoint_dir = tmp_path / "checkpoints"
 
-    # run-a 전체 완료
-    engine1, _ = _make_engine(items, checkpoint_dir, "run-a", tmp_path=tmp_path)
-    engine1.run(output_dir=tmp_path / "out1")
+    _run_with_checkpoint(items, checkpoint_dir, "run-a", tmp_path, "out1")
 
-    # run-b는 독립된 네임스페이스 → 전부 처리
-    engine2, stats2 = _make_engine(items, checkpoint_dir, "run-b", tmp_path=tmp_path)
-    engine2.run(output_dir=tmp_path / "out2")
-    source_stats2 = stats2.get_step_stats("source")
-    assert source_stats2 is not None
-    assert source_stats2.processed == 5
+    stats2 = _run_with_checkpoint(items, checkpoint_dir, "run-b", tmp_path, "out2")
+    assert stats2.get_step_stats("source").processed == 5

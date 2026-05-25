@@ -45,8 +45,7 @@ class QueueType(StrEnum):
     """Queue implementation to use for inter-step communication."""
 
     AUTO = "auto"
-    """Detect ``is_ready()`` override on downstream step → FullDiskQueue;
-    otherwise SpillQueue or plain Queue."""
+    """SpillQueue when ``queue_size > 0``, otherwise plain Queue."""
     SPILL = "spill"
     """Always use SpillQueue (memory-first, spills to disk when buffer is full)."""
     FULL_DISK = "full_disk"
@@ -77,7 +76,7 @@ class ExecutionConfig(_WrappingModel):
     """queue_size is reserved for future disk-spill threshold. 0 means unbounded."""
     chunk_size: int = 100
     queue_type: QueueType = QueueType.AUTO
-    """Queue implementation strategy. AUTO detects is_ready() override automatically."""
+    """Queue implementation strategy."""
 
     @field_validator("workers", "chunk_size")
     @classmethod

@@ -1,15 +1,16 @@
-"""Pipeline facade: step registration, config loading, execution."""
+"""Pipeline facade: step registration, graph assembly, execution."""
 
 from __future__ import annotations
 
 import logging
 import pickle
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from task_pipeliner.config import PipelineConfig, load_config
-from task_pipeliner.engine import PipelineEngine
+from task_pipeliner.base import StepBase
+from task_pipeliner.config import ExecutionConfig, PipelineConfig, QueueType, load_config
 from task_pipeliner.exceptions import StepRegistrationError
 from task_pipeliner.stats import StatsCollector
 
@@ -19,35 +20,99 @@ _LOG_FORMAT = "%(asctime)s %(levelname)-5s %(name)s:%(funcName)s:%(lineno)d %(me
 
 
 # ---------------------------------------------------------------------------
-# StepRegistry — Step 클래스 등록소
+# _StepGraph — resolved pipeline topology
 # ---------------------------------------------------------------------------
 
 
-class StepRegistry:
-    """Step 이름 → Step 클래스 매핑을 관리한다.
+@dataclass
+class _StepGraph:
+    """Resolved pipeline topology passed to PipelineEngine.
 
-    등록 시 pickle 가능 여부를 검증하여,
-    spawn 모드 멀티프로세싱에서 문제가 될 클래스를 조기에 차단한다.
+    Both the code path (register + step + pipe) and the YAML path
+    (config file or PipelineConfig object) converge here before execution.
     """
 
-    def __init__(self) -> None:
-        logger.debug("initialising StepRegistry")
-        self._registry: dict[str, type] = {}
+    nodes: list[tuple[str, StepBase]]
+    """Ordered list of (name, step) pairs.  First entry must be a SourceStep."""
+    connections: dict[str, dict[str, list[str]]]
+    """step_name → tag → [target_step_names]"""
+    execution: ExecutionConfig
+    checkpoint_dir: Path | None = None
+    resume_run_id: str | None = None
 
-    def register(self, name: str, cls: type) -> None:
-        """Step 클래스를 name으로 등록한다.
 
-        - 이미 같은 이름이 등록되어 있으면 StepRegistrationError
-        - pickle 불가능한 클래스면 StepRegistrationError
+# ---------------------------------------------------------------------------
+# Pipeline — registration, graph assembly, execution
+# ---------------------------------------------------------------------------
+
+
+class Pipeline:
+    """High-level API for building and running a pipeline.
+
+    Code path::
+
+        pipeline = Pipeline(workers=4)
+        pipeline.register("source", FileReader)
+        pipeline.register("writer", FileWriter)
+
+        source = pipeline.step("src", "source")
+        writer = pipeline.step("out", "writer")
+        source.pipe(writer)
+
+        stats = pipeline.run(output_dir=Path("out/"))
+
+    YAML path::
+
+        pipeline = Pipeline(workers=4)
+        pipeline.register("source", FileReader)
+        pipeline.register("writer", FileWriter)
+
+        stats = pipeline.run(config=Path("pipeline.yaml"), output_dir=Path("out/"))
+    """
+
+    def __init__(
+        self,
+        *,
+        workers: int = 4,
+        chunk_size: int = 100,
+        queue_type: QueueType = QueueType.AUTO,
+        queue_size: int = 0,
+        checkpoint_dir: Path | None = None,
+    ) -> None:
+        logger.debug(
+            "workers=%d chunk_size=%d queue_type=%s queue_size=%d checkpoint_dir=%s",
+            workers,
+            chunk_size,
+            queue_type,
+            queue_size,
+            checkpoint_dir,
+        )
+        self._registry: dict[str, type[StepBase]] = {}
+        self._steps: dict[str, StepBase] = {}  # insertion-ordered (Python 3.7+)
+        self._execution = ExecutionConfig(
+            workers=workers,
+            chunk_size=chunk_size,
+            queue_type=queue_type,
+            queue_size=queue_size,
+        )
+        self._checkpoint_dir = checkpoint_dir
+
+    # ------------------------------------------------------------------
+    # Registration
+    # ------------------------------------------------------------------
+
+    def register(self, name: str, cls: type[StepBase]) -> Pipeline:
+        """Register a step class under *name*. Returns self for chaining.
+
+        Raises ``StepRegistrationError`` if *name* is already registered or
+        *cls* is not picklable (spawn mode requirement).
         """
         logger.debug("name=%s cls=%s", name, cls.__name__)
-        # 중복 등록 방지
         if name in self._registry:
             raise StepRegistrationError(
                 f"Step '{name}' is already registered",
                 step_name=name,
             )
-        # spawn 모드에서 워커 프로세스로 전달하려면 pickle 가능해야 함
         try:
             pickle.dumps(cls)
         except Exception as exc:
@@ -56,16 +121,51 @@ class StepRegistry:
                 step_name=name,
             ) from exc
         self._registry[name] = cls
-        logger.debug("registered step '%s'", name)
+        logger.debug("registered '%s'", name)
+        return self
 
-    def __len__(self) -> int:
-        return len(self._registry)
+    def register_all(self, mapping: dict[str, type[StepBase]]) -> Pipeline:
+        """Register multiple step classes at once. Returns self for chaining."""
+        for name, cls in mapping.items():
+            self.register(name, cls)
+        return self
 
-    def get(self, name: str) -> type:
-        """name에 해당하는 Step 클래스를 반환한다.
+    # ------------------------------------------------------------------
+    # Step creation (code path)
+    # ------------------------------------------------------------------
 
-        미등록 시 StepRegistrationError (등록된 이름 목록 포함).
+    def step(self, name: str, type_name: str, **kwargs: Any) -> StepBase:
+        """Create and register a step instance for the code path.
+
+        Parameters
+        ----------
+        name:
+            Unique name for this step instance.
+        type_name:
+            Registered type name (from ``register()``).
+        **kwargs:
+            Passed to the step class constructor.
+
+        Returns the created step instance so callers can chain ``pipe()``.
         """
+        logger.debug("name=%s type=%s kwargs=%s", name, type_name, kwargs)
+        if name in self._steps:
+            raise StepRegistrationError(
+                f"Step name '{name}' is already used",
+                step_name=name,
+            )
+        cls = self._registry_get(type_name)
+        instance = cls(**kwargs)
+        self._steps[name] = instance
+        logger.debug("created step '%s' of type '%s'", name, type_name)
+        return instance
+
+    # ------------------------------------------------------------------
+    # Internal graph assembly
+    # ------------------------------------------------------------------
+
+    def _registry_get(self, name: str) -> type[StepBase]:
+        """Look up a registered class. Raises StepRegistrationError if not found."""
         if name not in self._registry:
             available = sorted(self._registry.keys())
             raise StepRegistrationError(
@@ -75,71 +175,171 @@ class StepRegistry:
             )
         return self._registry[name]
 
+    def _find_step_name(self, target: StepBase) -> str | None:
+        """Return the registered name for *target* instance, or None."""
+        for name, step in self._steps.items():
+            if step is target:
+                return name
+        return None
 
-class Pipeline:
-    """High-level API for building and running a pipeline."""
+    def _build_graph(self) -> _StepGraph:
+        """Build a ``_StepGraph`` from steps added via ``step()`` + ``pipe()``."""
+        logger.debug("building code-path graph from %d steps", len(self._steps))
+        nodes = list(self._steps.items())
+        connections: dict[str, dict[str, list[str]]] = {}
+        for name, step in nodes:
+            raw_conns: dict[str, list[StepBase]] = step.__dict__.get("_connections", {})
+            if not raw_conns:
+                continue
+            conns: dict[str, list[str]] = {}
+            for tag, targets in raw_conns.items():
+                target_names: list[str] = []
+                for target_step in targets:
+                    target_name = self._find_step_name(target_step)
+                    if target_name is not None:
+                        target_names.append(target_name)
+                    else:
+                        logger.warning(
+                            "step '%s' tag '%s' connects to unregistered step — skipped",
+                            name,
+                            tag,
+                        )
+                if target_names:
+                    conns[tag] = target_names
+            if conns:
+                connections[name] = conns
+        return _StepGraph(
+            nodes=nodes,
+            connections=connections,
+            execution=self._execution,
+            checkpoint_dir=self._checkpoint_dir,
+        )
 
-    def __init__(self) -> None:
-        logger.debug("initialising Pipeline")
-        self._registry = StepRegistry()
+    def _build_graph_from_config(
+        self,
+        path: Path,
+        variables: dict[str, Any] | None = None,
+    ) -> _StepGraph:
+        """Load a YAML config file and build a ``_StepGraph``."""
+        logger.debug("path=%s variables=%s", path, variables)
+        cfg = load_config(path, variables=variables)
+        return self._build_graph_from_config_object(cfg)
 
-    def register(self, name: str, cls: type) -> Pipeline:
-        """Register a step class. Returns self for chaining."""
-        self._registry.register(name, cls)
-        return self
+    def _build_graph_from_config_object(self, cfg: PipelineConfig) -> _StepGraph:
+        """Build a ``_StepGraph`` from a ``PipelineConfig`` object."""
+        logger.debug("building config-path graph steps=%d", len(cfg.pipeline))
+        enabled_cfgs = [s for s in cfg.pipeline if s.enabled]
+        if not enabled_cfgs:
+            return _StepGraph(
+                nodes=[],
+                connections={},
+                execution=cfg.execution,
+                checkpoint_dir=cfg.checkpoint_dir,
+                resume_run_id=cfg.resume_run_id,
+            )
 
-    def register_all(self, mapping: dict[str, type]) -> Pipeline:
-        """Register multiple step classes at once."""
-        for name, cls in mapping.items():
-            self._registry.register(name, cls)
-        return self
+        nodes: list[tuple[str, StepBase]] = []
+        for step_cfg in enabled_cfgs:
+            cls = self._registry_get(step_cfg.type)
+            extra = step_cfg.model_extra or {}
+            step = cls(**extra)
+            nodes.append((step_cfg.name, step))
+
+        enabled_names = {name for name, _ in nodes}
+        connections: dict[str, dict[str, list[str]]] = {}
+        for step_cfg in enabled_cfgs:
+            if step_cfg.outputs is None:
+                continue
+            conns: dict[str, list[str]] = {}
+            for tag, targets in step_cfg.outputs.items():
+                target_list = [targets] if isinstance(targets, str) else targets
+                valid_targets = []
+                for t in target_list:
+                    if t in enabled_names:
+                        valid_targets.append(t)
+                    else:
+                        logger.debug(
+                            "output target '%s' not in enabled steps — skipped", t
+                        )
+                if valid_targets:
+                    conns[tag] = valid_targets
+            if conns:
+                connections[step_cfg.name] = conns
+
+        return _StepGraph(
+            nodes=nodes,
+            connections=connections,
+            execution=cfg.execution,
+            checkpoint_dir=cfg.checkpoint_dir,
+            resume_run_id=cfg.resume_run_id,
+        )
+
+    # ------------------------------------------------------------------
+    # Run
+    # ------------------------------------------------------------------
 
     def run(
         self,
         *,
-        config: Path | PipelineConfig,
         output_dir: Path,
+        config: Path | PipelineConfig | None = None,
         variables: dict[str, Any] | None = None,
-    ) -> None:
-        """Load config (if path) and run the pipeline.
+    ) -> StatsCollector:
+        """Assemble the graph and run the pipeline.
 
         Parameters
         ----------
+        output_dir:
+            Directory for output files (stats.json, progress.log, pipeline.log).
+        config:
+            ``Path`` → load YAML config.  ``PipelineConfig`` → use directly.
+            ``None`` → use the code-path steps added via ``step()``.
         variables:
-            Optional variable overrides for ``${var}`` interpolation.
-            Only used when *config* is a Path (YAML loading).
-        """
-        logger.debug("config=%s output_dir=%s variables=%s", config, output_dir, variables)
+            Variable overrides for YAML ``${var}`` interpolation.
+            Ignored when *config* is not a ``Path``.
 
-        if isinstance(config, Path):
-            cfg = load_config(config, variables=variables)
+        Returns the ``StatsCollector`` with per-step metrics.
+        """
+        logger.debug(
+            "output_dir=%s config=%s variables=%s", output_dir, config, variables
+        )
+
+        if config is not None:
+            if isinstance(config, Path):
+                graph = self._build_graph_from_config(config, variables=variables)
+            else:
+                graph = self._build_graph_from_config_object(config)
         else:
-            cfg = config
+            graph = self._build_graph()
+
+        # Imported here to break the pipeline ↔ engine circular import
+        from task_pipeliner.engine import PipelineEngine  # noqa: PLC0415
 
         stats = StatsCollector()
         log_handler = self._setup_log_handler(output_dir / "pipeline.log")
 
         t0 = time.monotonic()
         try:
-            engine = PipelineEngine(config=cfg, registry=self._registry, stats=stats)
+            engine = PipelineEngine(graph=graph, stats=stats)
             engine.run(output_dir=output_dir)
             elapsed = time.monotonic() - t0
-            logger.info(
-                "pipeline completed config=%s elapsed=%.3fs", config, elapsed
-            )
+            logger.info("pipeline completed elapsed=%.3fs", elapsed)
         except Exception:
             elapsed = time.monotonic() - t0
-            logger.error(
-                "pipeline failed config=%s elapsed=%.3fs", config, elapsed,
-                exc_info=True,
-            )
+            logger.error("pipeline failed elapsed=%.3fs", elapsed, exc_info=True)
             raise
         finally:
             self._teardown_log_handler(log_handler)
 
+        return stats
+
+    # ------------------------------------------------------------------
+    # Log handler helpers (unchanged from previous version)
+    # ------------------------------------------------------------------
+
     @staticmethod
     def _setup_log_handler(path: Path) -> logging.FileHandler:
-        """task_pipeliner 로거에 파일 핸들러를 부착한다."""
+        """Attach a file handler to the task_pipeliner logger."""
         path.parent.mkdir(parents=True, exist_ok=True)
         handler = logging.FileHandler(str(path), encoding="utf-8")
         handler.setFormatter(logging.Formatter(_LOG_FORMAT))
@@ -151,7 +351,7 @@ class Pipeline:
 
     @staticmethod
     def _teardown_log_handler(handler: logging.FileHandler) -> None:
-        """파일 핸들러를 플러시하고 제거한다."""
+        """Flush and detach the file handler."""
         handler.flush()
         pkg_logger = logging.getLogger("task_pipeliner")
         pkg_logger.removeHandler(handler)
