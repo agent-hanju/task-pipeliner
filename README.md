@@ -6,13 +6,13 @@ A configurable Python data processing pipeline framework with mixed parallel/seq
 
 ```bash
 # As a dependency (in your pyproject.toml)
-pip install "task-pipeliner @ git+https://github.com/agent-hanju/task-pipeliner.git@v0.1.0"
+pip install "task-pipeliner @ git+https://github.com/agent-hanju/task-pipeliner.git@v0.2.2"
 ```
 
 ```toml
 # pyproject.toml
 dependencies = [
-    "task-pipeliner @ git+https://github.com/agent-hanju/task-pipeliner.git@v0.1.0",
+    "task-pipeliner @ git+https://github.com/agent-hanju/task-pipeliner.git@v0.2.2",
 ]
 ```
 
@@ -58,7 +58,7 @@ class FilterWorker(Worker):
     def __init__(self, min_length: int) -> None:
         self._min_length = min_length
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
+    def process(self, item: Any, emit: Callable[[Any, str], None]) -> None:
         if len(item.get("text", "")) >= self._min_length:
             emit(item, "kept")
         else:
@@ -87,7 +87,7 @@ class WriterStep(SequentialStep):
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._fh = open(self._path, "w", encoding="utf-8")
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
+    def process(self, item: Any, emit: Callable[[Any, str], None]) -> None:
         import json
         self._fh.write(json.dumps(item) + "\n")
 
@@ -139,24 +139,35 @@ pipeline.run(config=Path("pipeline_config.yaml"), output_dir=Path("./output"))
 
 ### Step Hierarchy
 
-Three abstract base classes for different step types:
+Four abstract base classes for different step types:
 
 | Class | Description | Key Method |
 |-------|-------------|------------|
 | `SourceStep` | First step only. Yields items. | `items()` |
+| `SequentialStep` | Single-thread sequential processing. | `process(item, emit)` |
+| `AsyncStep` | I/O-bound async processing (asyncio). | `process_async(item, emit)` |
 | `ParallelStep` | CPU-bound parallel processing. | `create_worker() -> Worker` |
-| `SequentialStep` | Stateful single-thread processing. | `process(item, state, emit)` |
 
 **Common interface** (inherited from `StepBase`):
 
 | Method/Property | Required | Description |
 |----------------|----------|-------------|
 | `outputs` | ClassVar | Tuple of declared output tags. Empty `()` = terminal step. |
-| `initial_state` | Optional | Returns initial state object for stateful processing. |
-| `is_ready(state)` | Optional | Gate processing until state is available (default: `True`). |
-| `get_output_state()` | Optional | Return `{target: state}` dict to dispatch state to other steps after `close()`. |
-| `open()` | Optional | Acquire resources before processing begins (called once, after `is_ready`). |
+| `open()` | Optional | Acquire resources before processing begins (called once). |
 | `close()` | Optional | Release resources after processing completes. Paired with `open()`. |
+| `pipe(step, tag)` | Optional | Connect this step's output tag to another step (code path). |
+
+**`AsyncStep` specific:**
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `concurrency` | `8` | Max concurrent `process_async()` coroutines. |
+
+**`SourceStep` specific:**
+
+| Method | Default | Description |
+|--------|---------|-------------|
+| `item_key(item)` | `None` | Return unique string key for checkpoint deduplication. Return `None` to skip. |
 
 ### Worker
 
@@ -172,7 +183,7 @@ class MyWorker(Worker):
         """Called once per worker process."""
         self._model = load_model()
 
-    def process(self, item: Any, state: Any, emit: Callable) -> None:
+    def process(self, item: Any, emit: Callable) -> None:
         result = self._model.predict(item)
         emit(result, "main")
 
@@ -201,7 +212,7 @@ worker_bytes = pickle.dumps(worker)
 step.open()
                                    worker = pickle.loads(worker_bytes)
                                    worker.open()
-                                   worker.process(item, state, emit) × N
+                                   worker.process(item, emit) × N
                                    worker.close()
 step.close()
 ```
@@ -211,11 +222,23 @@ step.close()
 High-level facade:
 
 ```python
-pipeline = Pipeline()
+# YAML path
+pipeline = Pipeline(workers=4)
 pipeline.register("step_name", StepClass)     # register one
 pipeline.register_all({"name": Class, ...})    # register many
-pipeline.run(config=path_or_config, output_dir=path, variables={"key": "val"})
+stats = pipeline.run(config=Path("pipeline.yaml"), output_dir=path, variables={"key": "val"})
+
+# Code path (no YAML)
+pipeline = Pipeline(workers=4)
+pipeline.register("source", SourceClass)
+pipeline.register("writer", WriterClass)
+source = pipeline.step("src", "source", paths=["./data"])
+writer = pipeline.step("out", "writer", output_path="./output.jsonl")
+source.pipe(writer)
+stats = pipeline.run(output_dir=path)
 ```
+
+`Pipeline.__init__` accepts: `workers`, `chunk_size`, `queue_type` (`QueueType.AUTO/SPILL/FULL_DISK`), `queue_size`, `checkpoint_dir`.
 
 ## Configuration
 
@@ -235,8 +258,9 @@ pipeline:
 
 execution:
   workers: 4                  # ProcessPoolExecutor worker count
-  queue_size: 0               # Reserved for future disk-spill (0 = unbounded)
+  queue_size: 0               # SpillQueue buffer size (0 = unbounded in-memory)
   chunk_size: 100             # Items per batch for parallel workers
+  queue_type: auto            # auto | spill | full_disk
 ```
 
 ### Variable Substitution
@@ -371,39 +395,59 @@ pipeline:
     output_path: ./removed.jsonl
 ```
 
-The `type` field selects which registered class to instantiate. The `name` field (defaulting to `type` when omitted) is the unique identifier used for `outputs` routing, stats tracking, and `get_output_state()` targeting. Existing configs without `name` work unchanged.
+The `type` field selects which registered class to instantiate. The `name` field (defaulting to `type` when omitted) is the unique identifier used for `outputs` routing and stats tracking. Existing configs without `name` work unchanged.
 
-### State Gating
+### Async Step
 
-For two-pass algorithms (build histogram → clean using histogram):
+For I/O-bound work (LLM API calls, HTTP requests), use `AsyncStep` instead of `ParallelStep`:
 
 ```python
-class CollectorStep(SequentialStep):
-    """Pass 1: Accumulate statistics while forwarding items."""
+class LLMStep(AsyncStep):
+    """Async step: calls an LLM API with bounded concurrency."""
     outputs = ("main",)
+    concurrency = 16  # max simultaneous coroutines
 
-    def process(self, item, state, emit):
-        self._histogram.update(item)
-        emit(item, "main")             # Forward immediately
-
-    def get_output_state(self):
-        # After all items processed, dispatch state to gated step (by config name)
-        return {"cleaner": self._histogram}
-
-
-class CleanerStep(SequentialStep):
-    """Pass 2: Process items using collected statistics."""
-    outputs = ("kept",)
-
-    def is_ready(self, state):
-        return state is not None        # Block until state arrives
-
-    def process(self, item, state, emit):
-        cleaned = apply_histogram(item, state)
-        emit(cleaned, "kept")
+    async def process_async(self, item: Any, emit: Callable) -> None:
+        result = await call_llm_api(item["text"])
+        emit({**item, "result": result}, "main")
 ```
 
-Items queue up in `CleanerStep` while `is_ready()` returns `False`. Once `CollectorStep.close()` completes and the StepRunner calls `get_output_state()`, the returned state is dispatched to the gated step, which unblocks and processes all queued items.
+`AsyncStep` runs an asyncio event loop in a single thread. Use it for `asyncio`-native libraries (`aiohttp`, `httpx`, etc.). For CPU-bound work, use `ParallelStep` instead.
+
+### Checkpoint / Resume
+
+Enable checkpoint-based resume for long pipelines:
+
+```python
+pipeline = Pipeline(checkpoint_dir=Path(".checkpoints"))
+stats = pipeline.run(config=Path("pipeline.yaml"), output_dir=Path("./output"))
+# On next run with the same checkpoint_dir, already-processed items are skipped
+```
+
+Or via YAML:
+
+```yaml
+checkpoint_dir: .checkpoints
+resume_run_id: <run_id_from_previous_run>   # optional: skip already-seen items
+
+pipeline:
+  - type: source
+    ...
+```
+
+`SourceStep.item_key(item)` must be implemented to enable per-item deduplication. Requires `pip install "task-pipeliner[checkpoint]"`.
+
+### Queue Types
+
+Control inter-step queue behavior:
+
+| `queue_type` | Behavior |
+|-------------|----------|
+| `auto` (default) | In-memory queue; switches to SpillQueue when `queue_size > 0` |
+| `spill` | Memory-first, spills to disk when buffer is full |
+| `full_disk` | Disk-primary, every item written immediately |
+
+Disk queues require `pip install "task-pipeliner[disk-queue]"`.
 
 ### Graceful Shutdown
 
@@ -467,22 +511,33 @@ After completion, `stats.json` in the output directory contains per-step metrics
 
 | Class | Module | Description |
 |-------|--------|-------------|
-| `Pipeline` | `task_pipeliner.pipeline` | Register steps, run pipeline |
-| `StepRegistry` | `task_pipeliner.pipeline` | Step name → class mapping with pickle validation |
-| `StepBase` | `task_pipeliner.base` | Common interface for all step types (outputs, state, lifecycle) |
-| `SourceStep` | `task_pipeliner.base` | ABC for SOURCE steps (yields items) |
-| `SequentialStep` | `task_pipeliner.base` | ABC for SEQUENTIAL steps (process in main thread) |
-| `ParallelStep` | `task_pipeliner.base` | ABC for PARALLEL steps (create workers for subprocesses) |
+| `Pipeline` | `task_pipeliner.pipeline` | Register steps, run pipeline (YAML or code path) |
+| `StepBase` | `task_pipeliner.base` | Common interface for all step types (outputs, open/close, pipe) |
+| `SourceStep` | `task_pipeliner.base` | ABC for SOURCE steps (`items()`, `item_key()`) |
+| `SequentialStep` | `task_pipeliner.base` | ABC for sequential steps (`process(item, emit)`) |
+| `AsyncStep` | `task_pipeliner.base` | ABC for async I/O-bound steps (`process_async(item, emit)`, `concurrency`) |
+| `ParallelStep` | `task_pipeliner.base` | ABC for parallel steps (`create_worker() -> Worker`) |
 | `Worker` | `task_pipeliner.base` | ABC for worker objects sent to subprocesses |
 | `PipelineError` | `task_pipeliner.exceptions` | Base exception |
 | `StepRegistrationError` | `task_pipeliner.exceptions` | Duplicate/unpicklable registration |
 | `ConfigValidationError` | `task_pipeliner.exceptions` | Invalid YAML config |
-| `PipelineConfig` | `task_pipeliner.config` | Pydantic model for pipeline config |
+| `PipelineConfig` | `task_pipeliner.config` | Pydantic model for pipeline config (includes `checkpoint_dir`, `resume_run_id`) |
 | `StepConfig` | `task_pipeliner.config` | Pydantic model for step config |
-| `ExecutionConfig` | `task_pipeliner.config` | Pydantic model for execution settings |
+| `ExecutionConfig` | `task_pipeliner.config` | Pydantic model for execution settings (includes `queue_type`) |
+| `QueueType` | `task_pipeliner.config` | Enum: `AUTO`, `SPILL`, `FULL_DISK` |
 | `load_config(path, variables)` | `task_pipeliner.config` | Load YAML config with optional `${var}` substitution |
+| `SpillQueue` | `task_pipeliner.spill_queue` | Memory-first queue that spills to disk |
+| `FullDiskQueue` | `task_pipeliner.spill_queue` | Disk-primary queue |
+| `CheckpointStore` | `task_pipeliner.checkpoint` | Protocol for checkpoint backends |
+| `NullCheckpointStore` | `task_pipeliner.checkpoint` | No-op checkpoint store (default) |
+| `DiskCacheCheckpointStore` | `task_pipeliner.checkpoint` | diskcache-backed checkpoint store |
+| `make_checkpoint_store` | `task_pipeliner.checkpoint` | Factory: returns `DiskCacheCheckpointStore` or `NullCheckpointStore` |
 
 ## Changelog
+
+### v0.2.2
+
+`AsyncStep` 추가 (I/O-bound 비동기 처리), Checkpoint/Resume 지원 (`checkpoint_dir`, `resume_run_id`, `item_key()`), Queue type 선택 (`QueueType.AUTO/SPILL/FULL_DISK`), `Pipeline.__init__`에 `queue_type`/`checkpoint_dir` 파라미터 추가. `process()` 시그니처에서 `state` 파라미터 제거 (`process(item, emit)`).
 
 ### v0.2.1
 
