@@ -60,6 +60,12 @@ class StepConfig(_WrappingModel):
     """Instance name. Defaults to ``type`` when omitted (backward compatible)."""
     enabled: bool = True
     outputs: dict[str, str | list[str]] | None = None
+    retry_count: int = 0
+    """Maximum number of retries on process() failure (0 = no retry)."""
+    retry_delay: float = 0.0
+    """Initial wait in seconds before the first retry."""
+    retry_backoff: float = 2.0
+    """Exponential backoff multiplier applied to retry_delay on each attempt."""
 
     @model_validator(mode="after")
     def _default_name(self) -> StepConfig:

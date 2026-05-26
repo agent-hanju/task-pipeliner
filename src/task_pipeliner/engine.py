@@ -213,6 +213,8 @@ class PipelineEngine:
             # SequentialStep → 단일 스레드 SequentialStepRunner
             p: SequentialStepRunner | ParallelStepRunner | AsyncStepRunner
             sc = sentinel_count_for[step_name]
+            retry_cfg = self.graph.retry_configs.get(step_name, (0, 0.0, 2.0))
+            retry_count, retry_delay, retry_backoff = retry_cfg
             if isinstance(step, ParallelStep):
                 p = ParallelStepRunner(
                     step=step,
@@ -232,6 +234,9 @@ class PipelineEngine:
                     output_queues=out_qs,
                     stats=self.stats,
                     sentinel_count=sc,
+                    retry_count=retry_count,
+                    retry_delay=retry_delay,
+                    retry_backoff=retry_backoff,
                 )
             else:
                 p = SequentialStepRunner(
@@ -241,6 +246,9 @@ class PipelineEngine:
                     output_queues=out_qs,
                     stats=self.stats,
                     sentinel_count=sc,
+                    retry_count=retry_count,
+                    retry_delay=retry_delay,
+                    retry_backoff=retry_backoff,
                 )
             runners.append(p)
 

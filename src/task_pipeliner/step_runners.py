@@ -248,6 +248,19 @@ class SequentialStepRunner(BaseStepRunner):
 
     step: SequentialStep
 
+    def __init__(
+        self,
+        *,
+        retry_count: int = 0,
+        retry_delay: float = 0.0,
+        retry_backoff: float = 2.0,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._retry_count = retry_count
+        self._retry_delay = retry_delay
+        self._retry_backoff = retry_backoff
+
     def run(self) -> None:
         logger.debug("run started step=%s", self.step_name)
         first_item_recorded = False
@@ -283,20 +296,39 @@ class SequentialStepRunner(BaseStepRunner):
                     first_item_recorded = True
 
                 self.stats.set_state(self.step_name, "processing")
-                try:
-                    proc_start = time.monotonic_ns()
-                    self.step.process(item, emit)
-                    proc_ns = time.monotonic_ns() - proc_start
-                    self.stats.add_processing_ns(self.step_name, proc_ns)
-                    self.stats.increment(self.step_name, "processed")
-                except Exception:
-                    self.stats.increment(self.step_name, "errored")
-                    logger.warning(
-                        "process() raised for step=%s item=%s",
-                        self.step_name,
-                        repr(item)[:200],
-                        exc_info=True,
-                    )
+                attempt = 0
+                delay = self._retry_delay
+                while True:
+                    try:
+                        proc_start = time.monotonic_ns()
+                        self.step.process(item, emit)
+                        proc_ns = time.monotonic_ns() - proc_start
+                        self.stats.add_processing_ns(self.step_name, proc_ns)
+                        self.stats.increment(self.step_name, "processed")
+                        break
+                    except Exception:
+                        if attempt < self._retry_count:
+                            attempt += 1
+                            self.stats.increment(self.step_name, "retried")
+                            logger.warning(
+                                "retry attempt=%d/%d step=%s item=%s",
+                                attempt,
+                                self._retry_count,
+                                self.step_name,
+                                repr(item)[:200],
+                            )
+                            if delay > 0:
+                                time.sleep(delay)
+                            delay *= self._retry_backoff
+                        else:
+                            self.stats.increment(self.step_name, "errored")
+                            logger.warning(
+                                "process() raised for step=%s item=%s",
+                                self.step_name,
+                                repr(item)[:200],
+                                exc_info=True,
+                            )
+                            break
                 self.stats.set_state(self.step_name, "idle")
         finally:
             self._send_sentinel()
@@ -540,6 +572,19 @@ class AsyncStepRunner(BaseStepRunner):
 
     step: AsyncStep
 
+    def __init__(
+        self,
+        *,
+        retry_count: int = 0,
+        retry_delay: float = 0.0,
+        retry_backoff: float = 2.0,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._retry_count = retry_count
+        self._retry_delay = retry_delay
+        self._retry_backoff = retry_backoff
+
     async def _process_one(
         self,
         item: Any,
@@ -548,20 +593,39 @@ class AsyncStepRunner(BaseStepRunner):
     ) -> None:
         """Process a single item under the semaphore, collecting stats."""
         async with sem:
-            try:
-                proc_start = time.monotonic_ns()
-                await self.step.process_async(item, emit)
-                proc_ns = time.monotonic_ns() - proc_start
-                self.stats.add_processing_ns(self.step_name, proc_ns)
-                self.stats.increment(self.step_name, "processed")
-            except Exception:
-                self.stats.increment(self.step_name, "errored")
-                logger.warning(
-                    "process_async() raised for step=%s item=%s",
-                    self.step_name,
-                    repr(item)[:200],
-                    exc_info=True,
-                )
+            attempt = 0
+            delay = self._retry_delay
+            while True:
+                try:
+                    proc_start = time.monotonic_ns()
+                    await self.step.process_async(item, emit)
+                    proc_ns = time.monotonic_ns() - proc_start
+                    self.stats.add_processing_ns(self.step_name, proc_ns)
+                    self.stats.increment(self.step_name, "processed")
+                    break
+                except Exception:
+                    if attempt < self._retry_count:
+                        attempt += 1
+                        self.stats.increment(self.step_name, "retried")
+                        logger.warning(
+                            "retry attempt=%d/%d step=%s item=%s",
+                            attempt,
+                            self._retry_count,
+                            self.step_name,
+                            repr(item)[:200],
+                        )
+                        if delay > 0:
+                            await asyncio.sleep(delay)
+                        delay *= self._retry_backoff
+                    else:
+                        self.stats.increment(self.step_name, "errored")
+                        logger.warning(
+                            "process_async() raised for step=%s item=%s",
+                            self.step_name,
+                            repr(item)[:200],
+                            exc_info=True,
+                        )
+                        break
 
     async def _run_async(self) -> None:
         loop = asyncio.get_running_loop()

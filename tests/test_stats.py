@@ -117,7 +117,7 @@ class TestStepStats:
         s.finish()
         d = s.to_dict()
         assert set(d.keys()) == {
-            "step_name", "processed", "errored", "emitted", "elapsed_seconds",
+            "step_name", "processed", "errored", "retried", "emitted", "elapsed_seconds",
             "initial_wait_seconds", "processing_seconds", "processing_avg_ms",
             "idle_seconds", "idle_avg_ms", "current_state",
         }

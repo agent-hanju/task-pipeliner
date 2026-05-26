@@ -18,6 +18,7 @@ class StepStats:
     step_name: str
     processed: int = 0
     errored: int = 0
+    retried: int = 0
     emitted: dict[str, int] = field(default_factory=dict[str,int])
     _start_time: float = field(default_factory=time.monotonic)
     _end_time: float | None = None
@@ -54,6 +55,7 @@ class StepStats:
             "step_name": self.step_name,
             "processed": self.processed,
             "errored": self.errored,
+            "retried": self.retried,
             "emitted": dict(self.emitted),
             "elapsed_seconds": round(self.elapsed_seconds, 4),
             "initial_wait_seconds": initial_wait,

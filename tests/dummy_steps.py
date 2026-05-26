@@ -274,6 +274,47 @@ class AsyncErrorOnItemStep(AsyncStep):
 
 
 # ---------------------------------------------------------------------------
+# FLAKY steps — for retry testing
+# ---------------------------------------------------------------------------
+
+
+class FlakySequentialStep(SequentialStep):
+    """Sequential step that fails ``fail_times`` times per item, then succeeds."""
+
+    outputs = ("main",)
+
+    def __init__(self, fail_times: int = 1, **_kwargs: Any) -> None:
+        self._fail_times = fail_times
+        self._fail_counts: dict[Any, int] = {}
+
+    def process(self, item: Any, emit: Callable[[Any, str], None]) -> None:
+        count = self._fail_counts.get(item, 0)
+        self._fail_counts[item] = count + 1
+        if count < self._fail_times:
+            raise RuntimeError(f"Deliberate failure #{count + 1} for item {item!r}")
+        emit(item, "main")
+
+
+class FlakyAsyncStep(AsyncStep):
+    """Async step that fails ``fail_times`` times per item, then succeeds."""
+
+    outputs = ("main",)
+
+    def __init__(self, fail_times: int = 1, **_kwargs: Any) -> None:
+        self._fail_times = fail_times
+        self._fail_counts: dict[Any, int] = {}
+
+    async def process_async(
+        self, item: Any, emit: Callable[[Any, str], None]
+    ) -> None:
+        count = self._fail_counts.get(item, 0)
+        self._fail_counts[item] = count + 1
+        if count < self._fail_times:
+            raise RuntimeError(f"Deliberate failure #{count + 1} for item {item!r}")
+        emit(item, "main")
+
+
+# ---------------------------------------------------------------------------
 # Checkpoint / queue-type test helpers
 # ---------------------------------------------------------------------------
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import pickle
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +39,10 @@ class _StepGraph:
     execution: ExecutionConfig
     checkpoint_dir: Path | None = None
     resume_run_id: str | None = None
+    retry_configs: dict[str, tuple[int, float, float]] = field(
+        default_factory=dict[str, tuple[int, float, float]]
+    )
+    """step_name → (retry_count, retry_delay, retry_backoff)"""
 
 
 # ---------------------------------------------------------------------------
@@ -266,12 +270,22 @@ class Pipeline:
             if conns:
                 connections[step_cfg.name] = conns
 
+        retry_configs: dict[str, tuple[int, float, float]] = {}
+        for step_cfg in enabled_cfgs:
+            if step_cfg.retry_count > 0:
+                retry_configs[step_cfg.name] = (
+                    step_cfg.retry_count,
+                    step_cfg.retry_delay,
+                    step_cfg.retry_backoff,
+                )
+
         return _StepGraph(
             nodes=nodes,
             connections=connections,
             execution=cfg.execution,
             checkpoint_dir=cfg.checkpoint_dir,
             resume_run_id=cfg.resume_run_id,
+            retry_configs=retry_configs,
         )
 
     # ------------------------------------------------------------------
