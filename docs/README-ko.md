@@ -6,13 +6,13 @@
 
 ```bash
 # 의존성으로 설치 (다른 프로젝트의 pyproject.toml에 추가)
-pip install "task-pipeliner @ git+https://github.com/agent-hanju/task-pipeliner.git@v0.1.0"
+pip install "task-pipeliner @ git+https://github.com/agent-hanju/task-pipeliner.git@v0.2.2"
 ```
 
 ```toml
 # pyproject.toml
 dependencies = [
-    "task-pipeliner @ git+https://github.com/agent-hanju/task-pipeliner.git@v0.1.0",
+    "task-pipeliner @ git+https://github.com/agent-hanju/task-pipeliner.git@v0.2.2",
 ]
 ```
 
@@ -58,7 +58,7 @@ class FilterWorker(Worker):
     def __init__(self, min_length: int) -> None:
         self._min_length = min_length
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
+    def process(self, item: Any, emit: Callable[[Any, str], None]) -> None:
         if len(item.get("text", "")) >= self._min_length:
             emit(item, "kept")
         else:
@@ -87,7 +87,7 @@ class WriterStep(SequentialStep):
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._fh = open(self._path, "w", encoding="utf-8")
 
-    def process(self, item: Any, state: Any, emit: Callable[[Any, str], None]) -> None:
+    def process(self, item: Any, emit: Callable[[Any, str], None]) -> None:
         import json
         self._fh.write(json.dumps(item) + "\n")
 
@@ -135,34 +135,39 @@ pipeline.register_all({
 pipeline.run(config=Path("pipeline_config.yaml"), output_dir=Path("./output"))
 ```
 
-또는 CLI로:
-
-```bash
-task-pipeliner run --config pipeline_config.yaml --output ./output
-```
-
 ## 핵심 개념
 
 ### Step 계층 구조
 
-세 가지 추상 기본 클래스:
+네 가지 추상 기본 클래스:
 
 | 클래스 | 설명 | 핵심 메서드 |
 |--------|------|------------|
 | `SourceStep` | 첫 번째 스텝 전용. 아이템 생산. | `items()` |
+| `SequentialStep` | 단일 스레드 순차 처리. | `process(item, emit)` |
+| `AsyncStep` | I/O-bound 비동기 처리 (asyncio). | `process_async(item, emit)` |
 | `ParallelStep` | CPU-bound 병렬 처리. | `create_worker() -> Worker` |
-| `SequentialStep` | 상태 기반 단일 스레드 처리. | `process(item, state, emit)` |
 
 **공통 인터페이스** (`StepBase`에서 상속):
 
 | 메서드/속성 | 필수 | 설명 |
 |------------|------|------|
 | `outputs` | ClassVar | 선언된 출력 태그 튜플. 빈 `()` = 터미널 스텝. |
-| `initial_state` | 선택 | 상태 기반 처리를 위한 초기 state 객체 반환. |
-| `is_ready(state)` | 선택 | state가 준비될 때까지 처리를 게이팅 (기본: `True`). |
-| `get_output_state()` | 선택 | `close()` 후 `{target: state}` 딕셔너리를 반환하여 다른 스텝에 state 전달. |
-| `open()` | 선택 | 처리 시작 전 리소스 획득 (`is_ready` 이후 1회 호출). |
+| `open()` | 선택 | 처리 시작 전 리소스 획득 (1회 호출). |
 | `close()` | 선택 | 처리 완료 후 리소스 해제. `open()`과 대칭. |
+| `pipe(step, tag)` | 선택 | 출력 태그를 다른 스텝에 연결 (코드 경로). |
+
+**`AsyncStep` 전용:**
+
+| 속성 | 기본값 | 설명 |
+|------|--------|------|
+| `concurrency` | `8` | 동시 실행 `process_async()` 코루틴 최대 수. |
+
+**`SourceStep` 전용:**
+
+| 메서드 | 기본값 | 설명 |
+|--------|--------|------|
+| `item_key(item)` | `None` | 체크포인트 중복 제거용 고유 키 반환. `None`이면 스킵. |
 
 ### Worker
 
@@ -207,7 +212,7 @@ worker_bytes = pickle.dumps(worker)
 step.open()
                                    worker = pickle.loads(worker_bytes)
                                    worker.open()
-                                   worker.process(item, state, emit) × N
+                                   worker.process(item, emit) × N
                                    worker.close()
 step.close()
 ```
@@ -217,11 +222,23 @@ step.close()
 고수준 파사드:
 
 ```python
-pipeline = Pipeline()
+# YAML 경로
+pipeline = Pipeline(workers=4)
 pipeline.register("step_name", StepClass)     # 하나 등록
 pipeline.register_all({"name": Class, ...})    # 여러 개 등록
-pipeline.run(config=path_or_config, output_dir=path)
+stats = pipeline.run(config=Path("pipeline.yaml"), output_dir=path, variables={"key": "val"})
+
+# 코드 경로 (YAML 없이)
+pipeline = Pipeline(workers=4)
+pipeline.register("source", SourceClass)
+pipeline.register("writer", WriterClass)
+source = pipeline.step("src", "source", paths=["./data"])
+writer = pipeline.step("out", "writer", output_path="./output.jsonl")
+source.pipe(writer)
+stats = pipeline.run(output_dir=path)
 ```
+
+`Pipeline.__init__` 파라미터: `workers`, `chunk_size`, `queue_type` (`QueueType.AUTO/SPILL/FULL_DISK`), `queue_size`, `checkpoint_dir`.
 
 ## 설정
 
@@ -241,9 +258,80 @@ pipeline:
 
 execution:
   workers: 4                  # ProcessPoolExecutor 워커 수
-  queue_size: 0               # 향후 디스크 스필용 예약 (0 = 무제한)
+  queue_size: 0               # SpillQueue 버퍼 크기 (0 = 무제한 인메모리)
   chunk_size: 100             # 병렬 워커당 배치 크기
+  queue_type: auto            # auto | spill | full_disk
 ```
+
+### 변수 치환
+
+설정 값에 `${var}` 플레이스홀더를 사용할 수 있으며, `variables` 파라미터로 로드 시점에 치환됩니다:
+
+```yaml
+# pipeline_config.yaml
+pipeline:
+  - type: loader
+    paths:
+      - ${input_dir}
+    outputs:
+      main: filter
+
+  - type: filter
+    min_length: 10
+    outputs:
+      kept: writer
+
+  - type: writer
+    output_path: ${output_dir}/result.jsonl
+
+execution:
+  workers: 4
+```
+
+```python
+# run.py
+import sys
+from pathlib import Path
+from task_pipeliner import Pipeline
+from steps import LoaderStep, FilterStep, WriterStep
+
+input_dir = sys.argv[1]
+output_dir = sys.argv[2]
+
+pipeline = Pipeline()
+pipeline.register_all({
+    "loader": LoaderStep,
+    "filter": FilterStep,
+    "writer": WriterStep,
+})
+pipeline.run(
+    config=Path("pipeline_config.yaml"),
+    output_dir=Path(output_dir),
+    variables={"input_dir": input_dir, "output_dir": output_dir},
+)
+```
+
+```bash
+python run.py ./data ./output
+```
+
+**타입 보존 치환** — YAML 파싱 후 dict tree를 순회하며 `${var}`를 치환합니다:
+
+| YAML 값 | 변수 값 | 치환 결과 | 결과 타입 |
+|----------|---------|-----------|-----------|
+| `${input_dir}` | `"/data"` | `"/data"` | `str` |
+| `${paths}` | `["/a.jsonl", "/b.jsonl"]` | `["/a.jsonl", "/b.jsonl"]` | `list` |
+| `${threshold}` | `42` | `42` | `int` |
+| `${output_dir}/result.jsonl` | `"/out"` | `"/out/result.jsonl"` | `str` |
+| `${mode:-fast}` | *(미제공)* | `"fast"` | `str` |
+| `$${NOT_A_VAR}` | — | `"${NOT_A_VAR}"` | `str` |
+
+- 값 전체가 `${var}`인 경우 → 변수 값을 그대로 대입 (list, dict, int 등 모든 타입)
+- 문자열 내부에 `${var}`가 포함된 경우 → `str()` 변환 후 문자열 치환
+- `${var:-default}` — 변수 미제공 시 `default` 값 사용
+- `$${var}` — 이스케이프, 리터럴 `${var}` 문자열로 출력
+- `variables` 제공 시 미해결 `${var}` (기본값 없음) → `ConfigValidationError` 발생
+- `variables` 미제공 시 `${...}`는 일반 문자열로 처리 (하위 호환)
 
 ### 설정 규칙
 
@@ -307,39 +395,59 @@ pipeline:
     output_path: ./removed.jsonl
 ```
 
-`type`은 등록된 클래스를 선택하고, `name`(생략 시 `type`과 동일)은 `outputs` 라우팅, stats 추적, `get_output_state()` 대상 지정에 사용되는 고유 식별자입니다. `name` 없는 기존 설정은 그대로 동작합니다.
+`type`은 등록된 클래스를 선택하고, `name`(생략 시 `type`과 동일)은 `outputs` 라우팅과 stats 추적에 사용되는 고유 식별자입니다. `name` 없는 기존 설정은 그대로 동작합니다.
 
-### State 게이팅
+### Async 스텝
 
-2-pass 알고리즘용 (히스토그램 구축 → 히스토그램으로 정제):
+I/O-bound 작업 (LLM API 호출, HTTP 요청)에는 `ParallelStep` 대신 `AsyncStep`을 사용하세요:
 
 ```python
-class CollectorStep(SequentialStep):
-    """Pass 1: 통계를 누적하면서 아이템을 전달."""
+class LLMStep(AsyncStep):
+    """Async 스텝: 제한된 동시성으로 LLM API 호출."""
     outputs = ("main",)
+    concurrency = 16  # 최대 동시 코루틴 수
 
-    def process(self, item, state, emit):
-        self._histogram.update(item)
-        emit(item, "main")             # 즉시 전달
-
-    def get_output_state(self):
-        # 모든 아이템 처리 후, 게이트된 스텝에 state 전달 (설정의 name 기준)
-        return {"cleaner": self._histogram}
-
-
-class CleanerStep(SequentialStep):
-    """Pass 2: 수집된 통계를 사용하여 아이템 처리."""
-    outputs = ("kept",)
-
-    def is_ready(self, state):
-        return state is not None        # state 도착까지 블록
-
-    def process(self, item, state, emit):
-        cleaned = apply_histogram(item, state)
-        emit(cleaned, "kept")
+    async def process_async(self, item: Any, emit: Callable) -> None:
+        result = await call_llm_api(item["text"])
+        emit({**item, "result": result}, "main")
 ```
 
-`is_ready()`가 `False`인 동안 아이템은 `CleanerStep` 큐에 대기. `CollectorStep.close()` 완료 후 StepRunner가 `get_output_state()`를 호출하여 반환된 state를 게이트된 스텝에 전달하면, 해당 스텝이 언블록되어 대기 중인 모든 아이템을 처리.
+`AsyncStep`은 단일 스레드에서 asyncio 이벤트 루프를 실행합니다. `asyncio` 네이티브 라이브러리(`aiohttp`, `httpx` 등)에 적합. CPU-bound 작업은 `ParallelStep`을 사용하세요.
+
+### 체크포인트 / 재개
+
+긴 파이프라인에 체크포인트 기반 재개 활성화:
+
+```python
+pipeline = Pipeline(checkpoint_dir=Path(".checkpoints"))
+stats = pipeline.run(config=Path("pipeline.yaml"), output_dir=Path("./output"))
+# 같은 checkpoint_dir로 다음 실행 시, 이미 처리된 아이템 건너뜀
+```
+
+또는 YAML:
+
+```yaml
+checkpoint_dir: .checkpoints
+resume_run_id: <이전_실행의_run_id>   # 선택: 이미 처리된 아이템 스킵
+
+pipeline:
+  - type: source
+    ...
+```
+
+`SourceStep.item_key(item)` 구현 시 아이템별 중복 제거 활성화. `pip install "task-pipeliner[checkpoint]"` 필요.
+
+### 큐 타입
+
+스텝 간 큐 동작 방식 제어:
+
+| `queue_type` | 동작 |
+|-------------|------|
+| `auto` (기본) | 인메모리 큐; `queue_size > 0`이면 SpillQueue로 전환 |
+| `spill` | 메모리 우선, 버퍼 가득 찰 때 디스크로 스필 |
+| `full_disk` | 디스크 우선, 모든 아이템 즉시 기록 |
+
+디스크 큐는 `pip install "task-pipeliner[disk-queue]"` 필요.
 
 ### 안전한 종료
 
@@ -424,20 +532,37 @@ task-pipeliner batch jobs.json
 
 | 클래스 | 모듈 | 설명 |
 |--------|------|------|
-| `Pipeline` | `task_pipeliner.pipeline` | 스텝 등록, 파이프라인 실행 |
-| `StepRegistry` | `task_pipeliner.pipeline` | 스텝 이름 → 클래스 매핑 (pickle 검증 포함) |
-| `StepBase` | `task_pipeliner.base` | 모든 스텝 타입의 공통 인터페이스 (outputs, state, lifecycle) |
-| `SourceStep` | `task_pipeliner.base` | SOURCE 스텝 ABC (아이템 생산) |
-| `SequentialStep` | `task_pipeliner.base` | SEQUENTIAL 스텝 ABC (메인 스레드에서 처리) |
-| `ParallelStep` | `task_pipeliner.base` | PARALLEL 스텝 ABC (서브프로세스에 Worker 전달) |
+| `Pipeline` | `task_pipeliner.pipeline` | 스텝 등록, 파이프라인 실행 (YAML 또는 코드 경로) |
+| `StepBase` | `task_pipeliner.base` | 모든 스텝 타입의 공통 인터페이스 (outputs, open/close, pipe) |
+| `SourceStep` | `task_pipeliner.base` | SOURCE 스텝 ABC (`items()`, `item_key()`) |
+| `SequentialStep` | `task_pipeliner.base` | 순차 스텝 ABC (`process(item, emit)`) |
+| `AsyncStep` | `task_pipeliner.base` | 비동기 I/O-bound 스텝 ABC (`process_async(item, emit)`, `concurrency`) |
+| `ParallelStep` | `task_pipeliner.base` | 병렬 스텝 ABC (`create_worker() -> Worker`) |
 | `Worker` | `task_pipeliner.base` | 서브프로세스로 전달되는 워커 ABC |
 | `PipelineError` | `task_pipeliner.exceptions` | 기본 예외 |
-| `StepRegistrationError` | `task_pipeliner.exceptions` | 중복/pickle 불가 등록 |
+| `StepRegistrationError` | `task_pipeliner.exceptions` | 중복/직렬화 불가 등록 |
 | `ConfigValidationError` | `task_pipeliner.exceptions` | 잘못된 YAML 설정 |
-| `PipelineConfig` | `task_pipeliner.config` | 파이프라인 설정 Pydantic 모델 |
+| `PipelineConfig` | `task_pipeliner.config` | 파이프라인 설정 Pydantic 모델 (`checkpoint_dir`, `resume_run_id` 포함) |
 | `StepConfig` | `task_pipeliner.config` | 스텝 설정 Pydantic 모델 |
-| `ExecutionConfig` | `task_pipeliner.config` | 실행 설정 Pydantic 모델 |
-| `load_config(path)` | `task_pipeliner.config` | YAML 설정 파일 로드 및 검증 |
+| `ExecutionConfig` | `task_pipeliner.config` | 실행 설정 Pydantic 모델 (`queue_type` 포함) |
+| `QueueType` | `task_pipeliner.config` | Enum: `AUTO`, `SPILL`, `FULL_DISK` |
+| `load_config(path, variables)` | `task_pipeliner.config` | YAML 설정 파일 로드 및 `${var}` 치환 |
+| `SpillQueue` | `task_pipeliner.spill_queue` | 메모리 우선, 디스크 스필 큐 |
+| `FullDiskQueue` | `task_pipeliner.spill_queue` | 디스크 우선 큐 |
+| `CheckpointStore` | `task_pipeliner.checkpoint` | 체크포인트 백엔드 프로토콜 |
+| `NullCheckpointStore` | `task_pipeliner.checkpoint` | No-op 체크포인트 스토어 (기본) |
+| `DiskCacheCheckpointStore` | `task_pipeliner.checkpoint` | diskcache 기반 체크포인트 스토어 |
+| `make_checkpoint_store` | `task_pipeliner.checkpoint` | 팩토리: `DiskCacheCheckpointStore` 또는 `NullCheckpointStore` 반환 |
+
+## Changelog
+
+### v0.2.2
+
+`AsyncStep` 추가 (I/O-bound 비동기 처리), 체크포인트/재개 지원 (`checkpoint_dir`, `resume_run_id`, `item_key()`), 큐 타입 선택 (`QueueType.AUTO/SPILL/FULL_DISK`), `Pipeline.__init__`에 `queue_type`/`checkpoint_dir` 파라미터 추가. `process()` 시그니처에서 `state` 파라미터 제거 (`process(item, emit)`).
+
+### v0.2.1
+
+내부 클래스명을 `*Producer` → `*StepRunner`로 변경하고, 구현을 `producers.py` → `step_runners.py`로 이동. 기존 `producers.py`는 re-export shim으로 유지되므로 외부 API 변경 없음.
 
 ## 라이선스
 

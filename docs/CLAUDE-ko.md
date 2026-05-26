@@ -2,14 +2,13 @@
 
 > **동기화 안내**: 이 파일은 `CLAUDE.md`의 한국어 버전입니다.
 > `CLAUDE.md`가 변경될 때마다 이 파일도 동일한 내용으로 업데이트해야 합니다.
-> WBS 기반 개발 방법론은 `docs/WBS-CLAUDE.md`에 별도 정리되어 있습니다.
 
-## WBS 준수
+## 구현 계획 준수
 
-- 프로젝트 루트의 `WBS.md`를 확인하고 준수한다.
-- 작업 착수 전 WBS의 의존 관계와 체크박스 상태를 반드시 확인한다.
-- 작업 완료 시 WBS의 해당 체크박스를 갱신한다.
-- WBS에 명시된 TDD 절차(레퍼런스 탐색 → 테스트 작성 → 구현 → 테스트 통과 → 린트/타입 → WBS 갱신)를 건너뛰지 않는다.
+- `PLAN.md` 를 확인하고 준수한다.
+- 작업 착수 전 의존 관계와 완료 상태를 반드시 확인한다.
+- 작업 완료 시 해당 항목을 ✅로 갱신한다.
+- 명시된 TDD 절차(레퍼런스 탐색 → 테스트 작성 → 구현 → 테스트 통과 → 린트/타입 → 계획 갱신)를 건너뛰지 않는다.
 
 ## 환경
 
@@ -52,6 +51,17 @@
 - `tests/dummy_steps.py`의 step 클래스도 반드시 모듈 레벨에 정의
 - Windows + Linux 크로스플랫폼 보장 필요
 
+## Step 계층 구조
+
+네 개의 ABC 기본 클래스가 기존의 단일 `BaseStep`을 대체한다:
+
+- `SourceStep` — `items()`로 입력 데이터를 생산; 체크포인트용 `item_key()` 선택 구현
+- `SequentialStep` — `process(item, emit)`를 구현하여 단일 스레드 순차 처리
+- `AsyncStep` — `process_async(item, emit)`를 구현하여 I/O-bound 비동기 처리 (asyncio); `concurrency` 속성으로 동시성 제한 (기본 8)
+- `ParallelStep` — `create_worker() -> Worker`를 구현하여 멀티프로세스 CPU-bound 처리
+
+`Worker`는 별도의 ABC로, 인스턴스가 직렬화되어 워커 프로세스로 전송된다.
+
 ## 테스트 격리 원칙
 
 - 프레임워크 테스트는 `tests/dummy_steps.py`의 dummy step만 사용한다. 비즈니스 로직(필터 기준, dedup 알고리즘 등)은 포함하지 않는다.
@@ -61,23 +71,40 @@
 
 ## Step 생명주기
 
+**SequentialStep:**
 ```
-__init__(config) → [is_ready() 게이팅] → open() → process() × N → close()
+__init__(config) → open() → process() × N → close()
+```
+
+**ParallelStep:**
+```
+메인 프로세스:                     워커 프로세스 N:
+step.__init__(config)
+worker = step.create_worker()
+step.open()
+                                   worker.open()        ← pool initializer (_worker_init)
+                                   worker.process() × N
+                                   worker.close()       ← atexit (_worker_finalize)
+step.close()
+```
+
+**AsyncStep:**
+```
+__init__(config) → open() → process_async() × N (concurrency 제한) → close()
 ```
 
 - `__init__`: 설정 주입만. 런타임 리소스(파일 핸들, 커넥션)를 여기서 획득하지 않는다.
-- `open()`: 첫 `process()` 호출 직전에 1회 호출 (`is_ready()` 통과 후). 런타임 리소스 획득용 (파일 열기, 임시 디렉토리 생성, 커넥션 수립).
-- `process()`: 아이템당 호출. 핵심 처리 로직.
-- `close()`: 모든 아이템 처리 후 1회 호출 (`finally` 블록 — 보장됨). `open()`에서 획득한 리소스를 해제한다.
-
-**PARALLEL step 주의사항:** `open()`과 `close()`는 **메인 프로세스 인스턴스**에서만 실행된다. 워커 프로세스는 pickle로 복원된 복사본을 받으며 `open()`을 호출하지 않는다. 워커에서 프로세스별 리소스가 필요하면 `process()` 내에서 lazy 초기화를 사용한다.
+- `open()` / `close()`: 메인 프로세스 생명주기. 리소스 획득/해제 (파일, 커넥션, 임시 디렉토리).
+- `Worker.open()` / `Worker.close()`: 워커 프로세스별 생명주기. 프로세스별 리소스 (DB 커넥션, 모델 로딩, GPU 컨텍스트)에 사용.
+- `create_worker()`: `step.open()` 이전에 호출되므로 Worker가 메인 프로세스의 직렬화 불가 리소스를 캡처하지 않는다.
 
 ## Pickle 원칙
 
 spawn 방식 multiprocessing에서 모든 전달 객체는 pickle 가능해야 한다.
 - 모든 클래스/함수는 모듈 레벨에 정의 (lambda, 중첩 함수, 중첩 클래스 금지)
 - `functools.partial`은 허용 (모듈 레벨 함수 기반일 때)
-- 새 Step 클래스 등록 전 pickle 가능 여부를 엔진이 조기 검증한다
+- 새 Step 클래스 등록 전 직렬화 가능 여부를 엔진이 조기 검증한다
+- `ParallelStep`의 경우: `create_worker()`가 반환하는 `Worker`는 직렬화 가능해야 한다. `ParallelStep` 자체는 절대 직렬화되지 않는다.
 
 ## 로깅 전략
 

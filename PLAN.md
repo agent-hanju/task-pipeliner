@@ -1,4 +1,4 @@
-# Implementation Plan: task-pipeliner
+# Plan: task-pipeliner
 
 > 이 문서는 task-pipeliner 프레임워크의 구현 계획 및 진행 상태를 기록한다.
 > 작성일: 2026-03-01 | 최종 갱신: 2026-05-25
@@ -9,7 +9,7 @@
 
 범용 데이터 처리 파이프라인 프레임워크. YAML config 기반으로 Step을 선언하고, 멀티프로세스/비동기 실행 엔진이 데이터를 흘려보내는 구조.
 
-**상태:** Phase 1~12 완료 (AsyncStep, SpillQueue, Programmable API 포함). 다음 목표: Retry 지원.
+**상태:** Phase 1~13 완료 (AsyncStep, SpillQueue, Programmable API, Retry 포함).
 
 ---
 
@@ -64,11 +64,11 @@ StepBase
 
 | ID | 작업 | 상태 |
 |----|------|------|
-| R-01 | `config.py` — `StepConfig`에 `retry_count`, `retry_delay`, `retry_backoff` 필드 추가 | ⬜ |
-| R-02 | `step_runners.py` — `SequentialStepRunner` 재시도 루프 추가 | ⬜ |
-| R-03 | `step_runners.py` — `AsyncStepRunner` 재시도 루프 추가 | ⬜ |
-| R-04 | `stats.py` — `StepStats`에 `retried` 카운터 추가 | ⬜ |
-| R-05 | 테스트 — 재시도 성공/실패/최대 초과 시나리오 | ⬜ |
+| R-01 | `config.py` — `StepConfig`에 `retry_count`, `retry_delay`, `retry_backoff` 필드 추가 | ✅ |
+| R-02 | `step_runners.py` — `SequentialStepRunner` 재시도 루프 추가 | ✅ |
+| R-03 | `step_runners.py` — `AsyncStepRunner` 재시도 루프 추가 | ✅ |
+| R-04 | `stats.py` — `StepStats`에 `retried` 카운터 추가 | ✅ |
+| R-05 | 테스트 — 재시도 성공/실패/최대 초과 시나리오 | ✅ |
 
 ---
 
@@ -89,4 +89,4 @@ StepBase
 - [x] `mypy src` — 오류 없음
 - [x] `__all__` 에 공개 심볼 전부 포함
 - [x] SpillQueue — `maxmem` 초과 시 디스크 스필, 19개 테스트 통과
-- [ ] Retry — 재시도 시나리오 테스트 통과
+- [x] Retry — 재시도 시나리오 테스트 통과 (17개)

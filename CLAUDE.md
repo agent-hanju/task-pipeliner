@@ -4,7 +4,7 @@
 
 ## 구현 계획 준수
 
-- `docs/IMPLEMENTATION_PLAN.md` 를 확인하고 준수한다.
+- `PLAN.md` 를 확인하고 준수한다.
 - 작업 착수 전 의존 관계와 완료 상태를 반드시 확인한다.
 - 작업 완료 시 해당 항목을 ✅로 갱신한다.
 - 명시된 TDD 절차(레퍼런스 탐색 → 테스트 작성 → 구현 → 테스트 통과 → 린트/타입 → 계획 갱신)를 건너뛰지 않는다.
@@ -40,6 +40,16 @@
 ## Project Structure
 
 - `src/task_pipeliner/` — package source (`src/` layout)
+  - `base.py` — ABCs: `SourceStep`, `SequentialStep`, `AsyncStep`, `ParallelStep`, `Worker`
+  - `pipeline.py` — `Pipeline` facade (registration, graph assembly, execution)
+  - `engine.py` — `PipelineEngine` (thread/process orchestration)
+  - `step_runners.py` — `InputStepRunner`, `SequentialStepRunner`, `AsyncStepRunner`, `ParallelStepRunner`
+  - `config.py` — Pydantic config models, `QueueType`, `load_config()`
+  - `stats.py` — `StatsCollector`
+  - `progress.py` — real-time progress reporting (stderr + `progress.log`)
+  - `checkpoint.py` — `CheckpointStore`, `DiskCacheCheckpointStore`, `NullCheckpointStore`
+  - `spill_queue.py` — `SpillQueue`, `FullDiskQueue`
+  - `exceptions.py` — `PipelineError`, `StepRegistrationError`, `ConfigValidationError`
 - `tests/` — framework tests (dummy steps only, no business logic)
 - `docs/` — implementation plan, design decisions, tech stack
 - `pyproject.toml` — package metadata, dependencies, build config
@@ -59,19 +69,20 @@
 
 ## Step Hierarchy
 
-Three ABC base classes replace the old monolithic `BaseStep`:
+Four ABC base classes replace the old monolithic `BaseStep`:
 
-- `SourceStep` — implements `items()` to yield input data
-- `SequentialStep` — implements `process(item, state, emit)` for single-thread stateful work
+- `SourceStep` — implements `items()` to yield input data; optionally `item_key()` for checkpointing
+- `SequentialStep` — implements `process(item, emit)` for single-thread sequential work
+- `AsyncStep` — implements `process_async(item, emit)` for I/O-bound async work (asyncio); configurable `concurrency` (default 8)
 - `ParallelStep` — implements `create_worker() -> Worker` for multi-process CPU-bound work
 
-`Worker` is a separate ABC whose instances are pickled and sent to worker processes.
+`Worker` is a separate ABC whose instances are serialized and sent to worker processes.
 
 ## Step Lifecycle
 
 **SequentialStep:**
 ```
-__init__(config) → [is_ready() gating] → open() → process() × N → close()
+__init__(config) → open() → process() × N → close()
 ```
 
 **ParallelStep:**
@@ -79,14 +90,16 @@ __init__(config) → [is_ready() gating] → open() → process() × N → close
 Main process:                      Worker process N:
 step.__init__(config)
 worker = step.create_worker()
-pickle.dumps(worker)
-[is_ready() gating]
 step.open()
-                                   worker = pickle.loads(...)
-                                   worker.open()
+                                   worker.open()        ← _worker_init() via pool initializer
                                    worker.process() × N
-                                   worker.close()
+                                   worker.close()       ← _worker_finalize() via atexit
 step.close()
+```
+
+**AsyncStep:**
+```
+__init__(config) → open() → process_async() × N (concurrency-limited) → close()
 ```
 
 - `__init__`: Config injection only. Do NOT acquire runtime resources (file handles, connections) here.
@@ -175,14 +188,13 @@ Key points:
 **Per-module expectations:**
 
 - `config.py` — INFO: config loaded (path, step count). WARNING: step disabled.
-- `io.py` — INFO: reader opened (file count), writer opened/closed (output path).
 - `stats.py` — INFO: stats JSON written. WARNING: write failure suppressed.
+- `progress.py` — No direct log calls (writes to stderr and `progress.log` separately).
 - `step_runners.py` — INFO: step runner started/finished (step name), sentinel sent/received. WARNING: `process()` exception (item skipped, with truncated repr).
 - `engine.py` — INFO: pipeline started (step count, worker count), pipeline completed. WARNING: process join timeout. ERROR: signal-triggered shutdown, worker process crash.
-- `pipeline.py` — INFO: pipeline run started/completed (config path, input count).
-- `cli.py` — Logging setup only (configures root handler). No direct log calls needed.
+- `pipeline.py` — INFO: pipeline run started/completed. Logging setup via `_setup_log_handler()` (attaches file handler to `task_pipeliner` logger).
 
 **Rules:**
 - Never log sensitive data or full item contents — use truncated repr (`repr(item)[:200]`).
-- Child processes inherit the logger name but add their own handlers via `StatsCollector.setup_log_handler`.
+- Child processes do NOT inherit the main-process file handler. Each worker process gets its own log handler via `Pipeline._setup_log_handler()` called at worker init.
 - `exceptions.py`, `base.py` — No logging (pure data definitions).
